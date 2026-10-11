@@ -8,9 +8,12 @@ SEQUENCES = {
     "fastq": "fastq", "fq": "fastq", "gb": "genbank", "gbk": "genbank", "genbank": "genbank",
     "embl": "embl", "pir": "pir", "nexus": "nexus", "nex": "nexus", "phy": "phylip",
     "phylip": "phylip", "stockholm": "stockholm", "aln": "clustal", "seqxml": "seqxml",
-    "abi": "abi", "ab1": "abi", "sff": "sff",
+    "abi": "abi", "ab1": "abi", "abif": "abi", "sff": "sff",
+    "dna": "snapgene", "xdna": "xdna", "gck": "gck", "ape": "genbank",
+    "gbff": "genbank", "gbs": "genbank", "gbank": "genbank", "fsa": "fasta",
+    "tab": "tab", "p1": "pir", "maf": "maf", "msf": "msf",
 }
-SEQ_OUTPUTS = "fasta fa fastq fq gb gbk embl pir nexus phy stockholm aln seqxml".split()
+SEQ_OUTPUTS = "fasta fa fastq fq gb gbk embl pir nexus phy stockholm aln seqxml xdna".split()
 MESH_INPUTS = "stl ply obj off glb gltf 3mf dae".split()
 MESH_OUTPUTS = "stl ply obj off glb".split()
 INPUTS = {"Chemical structures": " ".join(CHEM_INPUTS), "Biological sequences": " ".join(SEQUENCES),
@@ -23,7 +26,11 @@ def targets(path):
     if ext in CHEM_INPUTS:
         return CHEM_OUTPUTS
     if ext in SEQUENCES:
-        return [target for target in SEQ_OUTPUTS if target not in ("fastq", "fq") or ext in ("fastq", "fq", "abi", "ab1", "sff")]
+        if ext == "nex" and Path(path).is_file():
+            with Path(path).open("rb") as stream:
+                if stream.read(4) == b"NEX1":
+                    return []
+        return [target for target in SEQ_OUTPUTS if target not in ("fastq", "fq") or ext in ("fastq", "fq", "abi", "ab1", "abif", "sff")] + ["svg", "png", "pdf"]
     if ext in MESH_INPUTS:
         return MESH_OUTPUTS
     return []
@@ -74,36 +81,66 @@ def molecules(source, ext, folder, check):
         raise ValueError("No valid chemical structures were found.")
 
 def sequences(source, ext, folder, check):
+    import hashlib
+    import re
     from Bio import SeqIO
     source_format = SEQUENCES[source.suffix.lower().lstrip(".")]
-    records = []
-    for record in SeqIO.parse(str(source), source_format):
-        check()
-        if not record.seq:
-            raise ValueError("Empty sequence records cannot be converted.")
-        if "molecule_type" not in record.annotations:
-            suffix = source.suffix.lower()
-            alphabet = set(str(record.seq).upper()) - set("-?")
-            if suffix == ".faa":
-                kind = "protein"
-            elif suffix == ".fna" or alphabet <= set("ACGTNRYSWKMBDHV"):
-                kind = "DNA"
-            elif alphabet <= set("ACGUNRYSWKMBDHV"):
-                kind = "RNA"
-            else:
-                kind = "protein"
-            record.annotations["molecule_type"] = kind
-        records.append(record)
-    if not records:
-        raise ValueError("No sequence records were found.")
-    if ext in ("fastq", "fq") and any("phred_quality" not in record.letter_annotations and "solexa_quality" not in record.letter_annotations for record in records):
-        raise ValueError("FASTQ output needs measured quality scores. Scores are never invented.")
-    target = folder / f"{source.stem}.{ext}"
-    check()
-    SeqIO.write(records, str(target), SEQUENCES[ext])
-    restored = list(SeqIO.parse(str(target), SEQUENCES[ext]))
-    if [str(record.seq).upper() for record in restored] != [str(record.seq).upper() for record in records]:
-        raise ValueError("Sequence output failed the sequence-content check.")
+    with SeqIO.parse(str(source), source_format) as parser:
+        original = hashlib.sha256()
+        count = 0
+
+        def update(digest, record):
+            sequence = str(record.seq).upper().encode("ascii")
+            digest.update(str(len(sequence)).encode("ascii") + b":" + sequence)
+
+        def records():
+            nonlocal count
+            for record in parser:
+                check()
+                if not record.seq:
+                    raise ValueError("Empty sequence records cannot be converted.")
+                if "molecule_type" not in record.annotations:
+                    suffix = source.suffix.lower()
+                    alphabet = set(str(record.seq).upper()) - set("-?")
+                    if suffix == ".faa":
+                        kind = "protein"
+                    elif suffix == ".fna" or alphabet <= set("ACGTNRYSWKMBDHV"):
+                        kind = "DNA"
+                    elif alphabet <= set("ACGUNRYSWKMBDHV"):
+                        kind = "RNA"
+                    else:
+                        kind = "protein"
+                    record.annotations["molecule_type"] = kind
+                if ext in ("fastq", "fq") and "phred_quality" not in record.letter_annotations and "solexa_quality" not in record.letter_annotations:
+                    raise ValueError("FASTQ output needs measured quality scores. Scores are never invented.")
+                if record.id.startswith("<unknown"):
+                    record.id = re.sub(r"[^A-Za-z0-9_.-]", "_", source.stem) + f"_{count + 1}"
+                    record.name = record.id
+                count += 1
+                update(original, record)
+                yield record
+            if not count:
+                raise ValueError("No sequence records were found.")
+
+        if ext in ("svg", "png", "pdf"):
+            import plasmid_maps
+            plasmid_maps.export(records(), source, ext, folder, check)
+            return
+        restored = hashlib.sha256()
+        if ext == "xdna":
+            for index, record in enumerate(records(), 1):
+                target = folder / f"{source.stem}_{index:04d}.{ext}"
+                SeqIO.write([record], str(target), "xdna")
+                update(restored, SeqIO.read(str(target), "xdna"))
+        else:
+            target = folder / f"{source.stem}.{ext}"
+            SeqIO.write(records(), str(target), SEQUENCES[ext])
+            for record in SeqIO.parse(str(target), SEQUENCES[ext]):
+                check()
+                update(restored, record)
+        if original.digest() != restored.digest():
+            raise ValueError("Sequence output failed the sequence-content check.")
+
 
 def meshes(source, ext, folder, check):
     import numpy as np

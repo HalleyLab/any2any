@@ -2,6 +2,7 @@
 import argparse
 import atexit
 import html
+import re
 import uuid
 from urllib.parse import quote
 import os
@@ -24,8 +25,13 @@ import pillow_heif
 import scientific
 import source_formats
 import research_formats
+import imaging_formats
+import genomics_formats
+import lab_signals
+import pdf_latex
 
-EXTRA_CONVERTERS = (source_formats, scientific, research_formats)
+EXTRA_CONVERTERS = (source_formats, imaging_formats, lab_signals, scientific, research_formats, genomics_formats, pdf_latex)
+FORMAT_LABELS = {"tex": "tex (text)", "tex-layout": "tex (layout)"}
 
 ROOT = Path(__file__).resolve().parent
 pillow_heif.register_heif_opener()
@@ -43,7 +49,7 @@ INPUTS = {
     "Subtitles": "srt vtt ass ssa",
 }
 OUTPUTS = {
-    "Video": "mp4 mkv mov webm avi ts flv mpg ogv 3gp mp3 wav flac m4a aac ogg opus aiff wma ac3 au",
+    "Video": "mp4 mkv mov webm avi ts flv mpg ogv 3gp mp3 wav flac m4a aac ogg opus aiff wma ac3 au png jpg tiff",
     "Audio": "mp3 wav flac m4a aac ogg opus aiff wma ac3 au",
     "Images": "png jpg webp bmp tiff gif ico avif heic ppm tga jp2 pdf",
     "Documents": "docx doc odt rtf pdf txt md html epub rst tex org",
@@ -350,6 +356,20 @@ def convert_pages(source, ext, folder, cancel):
 def convert_media(source, ext, folder, cancel):
     result = folder / f"{source.stem}.{ext}"
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    if ext in ("png", "jpg", "tiff"):
+        safe_stem = source.stem.replace("%", "_")
+        pattern = folder / f"{safe_stem}_%06d.{ext}"
+        args = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-n", "-protocol_whitelist", "file,pipe,data,crypto", "-i", source,
+                "-map", "0:v:0", "-an", "-fps_mode", "passthrough"]
+        args += ["-q:v", "2"] if ext == "jpg" else ["-pix_fmt", "rgb48le"] if ext == "tiff" else []
+        run_command(args + ["-start_number", "1", pattern], cancel)
+        frames = sorted(folder.glob(f"*.{ext}"))
+        if not frames:
+            raise ValueError("No video frames were decoded.")
+        for frame in (frames[0], frames[-1]):
+            with Image.open(frame) as verified:
+                verified.load()
+        return
     args = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-n",
             "-protocol_whitelist", "file,pipe,data,crypto", "-i", source]
     if category(source) == "Subtitles":
@@ -395,7 +415,8 @@ def convert(source, ext, output, cancel=None):
         else:
             convert_document(source, ext, folder, scratch, cancel)
         check_cancel(cancel)
-        produced = list(folder.glob(f"*.{ext}"))
+        output_ext = "tex" if ext == "tex-layout" else ext
+        produced = list(folder.glob(f"*.{output_ext}"))
         if not produced or any(not file.stat().st_size for file in produced):
             raise RuntimeError("No valid output was produced.")
         containers = {"docx": "word/document.xml", "xlsx": "xl/workbook.xml",
@@ -417,12 +438,15 @@ def publish_files(folder, produced, source, output, cancel):
     reserved = []
     try:
         asset_index = 0
+        source_stem = source.with_suffix("").stem if genomics_formats.sequence_gzip(source) else source.stem
+        tex_assets = any(file.suffix.lower() == ".tex" for file in produced)
+        asset_stem = re.sub(r"[^A-Za-z0-9_-]", "_", source_stem)[:100] if tex_assets else source_stem
         for file in files:
             if file in produced:
-                name = f"{source.stem}{file.suffix}" if len(produced) == 1 else file.name
+                name = f"{source_stem}{file.suffix}" if len(produced) == 1 else file.name
             else:
                 asset_index += 1
-                name = f"{source.stem}_asset_{asset_index}{file.suffix}"
+                name = f"{asset_stem}_asset_{asset_index}{file.suffix}"
             candidate = output / name
             index = 1
             while True:
@@ -482,7 +506,7 @@ def gui():
     target = tk.StringVar()
     output = tk.StringVar(value=str(ROOT / "output"))
     status = tk.StringVar(value="Choose files to start.")
-    formats = ttk.Combobox(controls, textvariable=target, width=10, state="readonly")
+    formats = ttk.Combobox(controls, textvariable=target, width=14, state="readonly")
     formats.pack(side="left", padx=10)
     ttk.Label(main, textvariable=status, width=44, wraplength=320).pack(anchor="w")
 
@@ -492,6 +516,7 @@ def gui():
 
     def update_files():
         common = [ext for ext in targets(files[0]) if all(ext in targets(f) for f in files)] if files else []
+        common = [FORMAT_LABELS.get(ext, ext) for ext in common]
         formats.configure(values=common)
         if target.get() not in common:
             target.set(common[0] if common else "")
@@ -592,7 +617,7 @@ def gui():
         formats.configure(state="disabled")
         start_button.configure(text="Cancel")
         status.set("Converting...")
-        threading.Thread(target=work, args=(files.copy(), target.get(), output.get()), daemon=True).start()
+        threading.Thread(target=work, args=(files.copy(), next((ext for ext, label in FORMAT_LABELS.items() if label == target.get()), target.get()), output.get()), daemon=True).start()
 
     def poll():
         try:
