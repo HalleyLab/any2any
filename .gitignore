@@ -1,0 +1,12 @@
+# Local dependencies and generated files
+.venv/
+tools/
+output/
+__pycache__/
+*.py[cod]
+.any2any-*/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
