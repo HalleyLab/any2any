@@ -2,67 +2,78 @@
 
 Validated on Windows with the pinned dependencies, 2026-10-11.
 
-**Not every supported conversion is lossless.** Opening a result proves readability,
-not numerical, annotation or layout fidelity. The checks below use generated files;
-they are not a certification of every vendor format, model or version.
+**Supported does not mean universally lossless.** A readable output can still lose
+values, annotations or layout. Preservation files retain information that the
+selected target cannot hold; keep them beside the result. They are not automatically
+reapplied by every reverse converter. Originals are never replaced.
 
 ## Results
 
-Run `RunTests.bat` to repeat the four suites. They cover 441 successful conversions,
-31 refused-loss cases, and additional cancellation, collision and interface checks.
-All generated source files remain unchanged. Existing outputs are not overwritten;
-failed conversions publish no partial files.
+The six suites completed **1,298 successful conversions and 58 safe refusals**,
+plus cancellation, collision, original-preservation and compact-interface checks.
+Failures publish no partial files; existing outputs are not overwritten.
 
-| Area | What was checked | Limits |
+| Suite | Successful conversions | Safe refusals |
+| --- | ---: | ---: |
+| Core/UI | 84 | Additional safety assertions |
+| Research/code | 166 | Additional boundary assertions |
+| Generated lab/image/genomic/LaTeX | 113 | Additional safety assertions |
+| Adversarial fidelity | 78 | 31 |
+| Extended cross-format/preservation | 811 | 27 |
+| Public instrument samples | 46 | 0 |
+
+The public suite checks 6 Leica image series and 881 signal/event/waveform arrays
+containing 7,851,613 recording values. It includes XZ, emission/excitation wavelength
+and combined Z/time/wavelength acquisitions; ABF1/ABF2, Spike2 SMR, Plexon PLX,
+Intan RHD and NeuroExplorer NEX. Leica planes match independently exported
+Fiji/Bio-Formats TIFF references. All ABF sweeps/channels also match development-only
+pyABF within float32 reader precision. Remaining export comparisons are exact
+against the parsed arrays, not an independent certification of each vendor decoder.
+
+Run `RunTests.bat` for all suites. Public samples require a one-time explicit
+`test_vendor_formats.py --download`; without the cache that suite reports SKIP.
+[Fixture provenance](fixtures/README.md) and [URL/hash manifest](fixtures/vendor-samples.json)
+record the external samples; binaries stay outside Git.
+
+## Preservation and checks
+
+| Area | Checks and retained information | Limits |
 | --- | --- | --- |
-| Numeric arrays | Exact float64/complex128/int64/uint64/logical values, non-finite values, dtype and multidimensional shapes; HDF5 group/dataset attributes and NetCDF calibration/dimensions | MAT represents scalars as 1x1 and 1D vectors as columns. NetCDF boolean storage differs. Object/reference arrays and linked HDF5 objects are rejected. |
-| Research tables | Nullable integers above 2^53, unsigned 64-bit values, leading-zero IDs, literal NA/NULL text, floating-point precision, row labels, worksheets and common statistical labels | CSV has no type schema and may merge empty strings with missing cells. Statistical formats can normalize names or omit unsupported metadata. Workbook formulas/styles/charts do not survive data-only exports. |
-| Lab images | Exact rendered uint16 samples and float64 stacks, dimensions, axes, calibration sidecars; generated DNG/CZI/OME-TIFF/MRC/Imaris fixtures | RAW export is a rendered sRGB image, not preserved sensor data. Vendor projects, pyramid levels, ROIs and every acquisition field are not reconstructed. |
-| Ordinary images | Exact representative RGBA PNG samples, PNG text, ICC bytes and resolution; animation frame counts and PDF page counts | JPEG/WebP/AVIF/HEIC compression, palette conversion, transparency flattening, resized icons and rasterized PDF are not lossless. Metadata is not universal across image formats. |
-| Recordings | Calibrated ABF/EEG/FIF/NWB/FCS samples, sample rates, units, event labels/times, first sample, available spike-waveform offset; FAST5/POD5 ADC counts and current calibration | Export keeps parsed signals and metadata, not every experiment/project object. Basecalls, proprietary analyses, EEG processing state and all vendor metadata are not universally reproduced. |
-| EDF/BDF | Channel counts, sample counts/rates, calibration tolerance and event labels/times | Samples are quantized within 1.1 digital steps; annotation times are checked within 0.1 ms. This is not exact float preservation. |
-| Sequences/plasmids | FASTQ qualities and sequence case; representative GenBank/EMBL feature locations, strand, qualifiers and circular topology; BAM/SAM tags and read orientation | FASTA drops qualities/features. Alignment-to-reads exports primary alignments only. Rich annotations depend on parser/writer support; some formats normalize sequence case. Maps are pictures, not sequence archives. |
-| Chemistry | Representative SDF/MOL/SMILES bond orders, aromaticity, formal charge and stereochemistry | Coordinate-only formats, residues, crystal/calculate metadata and generated geometry are not universally preserved. Runtime validation of other chemistry outputs checks heavy-atom count only. |
-| Meshes | Representative triangle counts and coordinates within float32 tolerance | Some formats reduce coordinate precision. Textures, materials, units, scene structure and topology are not guaranteed. Runtime validation checks geometry bounds. |
-| Code/structured text | Representative source round trips, notebook language/source, escaped output, structured values and no input-code execution | Languages are not translated. Notebook rich outputs, formatting, comments and XML scalar types do not universally survive. |
-| Documents/PDF/LaTeX | Office/PDF readability, representative text/pages, asset references and rollback. Both LaTeX modes previously compiled on a generated two-page sample; layout output was rendered and compared | Office/Pandoc can change fonts, layout, formulas and special features. Editable LaTeX does not recover equation source, tables or vectors. Layout mode embeds PDF pages and preserves appearance, not editable document structure. |
-| Audio/video | Exact decoded PCM24/32 and float32/64 audio, original channel counts and sample rates for WAV/AIFF/AU; exact FLAC where representable; media readability and extracted frame counts | Existing lossy input cannot be restored. Video and compressed-audio exports remain lossy and select the first tracks. Full visual equality of every long-video frame was not checked. |
+| Arrays | Cross-format matrix: bool, signed/unsigned 8/16/32/64-bit integers, float16/32/64, complex64/128, Unicode/binary strings; scalar, vector, matrix, 3D and empty shapes. Exact runtime readback checks names, shape, values, complex components and signed zero. HDF5 groups/attributes and NetCDF calibration/dimensions retain metadata. | MAT uses 1x1 scalars and column vectors; padded/reshaped strings are rejected. NetCDF uses integer bool storage and promotes float16 exactly. Object/reference arrays, linked HDF5 objects and grouped NetCDF are refused. |
+| Tables | Large nullable integers, leading-zero IDs, empty versus missing text, booleans, precise floats, worksheets and common labels. Reopen outputs; add an exact typed Parquet companion when values, column names or dtypes differ. Schema/attributes remain in JSON. Scientific XLSX numeric changes are refused. | Parsed tables are preserved, not complete workbook formulas/styles/charts or arbitrary R/SPSS project objects. A companion may be required to recover original types or values. |
+| Microscopy/RAW | Full numeric arrays, axes, parsed metadata and calibration; Leica spectral/XZ axes and acquisition XML. TIFF pyramid levels and visible RAW sensor mosaic/Bayer pattern retain NPZ companions. Reduced-depth/lossy previews retain original numeric arrays. | RAW primary outputs are rendered sRGB. Sensor margins, proprietary projects and every ROI/acquisition object are not reconstructed. Some readers need an entire series in RAM. Unsupported LIF channel layouts or inconsistent pixel blocks are refused. |
+| Ordinary images | Representative RGBA/uint16 samples, palettes, parsed metadata, ICC/resolution; lossless static WebP. Lossy, flattened, resized and animated-WebP exports retain decoded pixel companions. Animation frames/timing are checked. | JPEG/AVIF/HEIC, palette changes and resized icons can change primary pixels. Animated WebP can normalize RGB beneath zero alpha; companions retain those samples. PSD layers and unknown source fields are not archived. |
+| Recordings | Complete parsed samples, sample rates, units, labels/times, first sample and available waveform timing. Neo analog calibration uses float64 and records original channel calibration. CSV/TSV decimal output round-trips parsed float values exactly. HDF5/NPZ/MAT retain arrays and JSON metadata. | Proprietary analyses, original ADC blocks, all project metadata and every acquisition variant are not universally archived. Reader calibration and interpretation still matter. |
+| EDF/BDF/nanopore | EDF sample rate/count/calibration/event readback; FAST5/POD5 exact ADC counts plus current calibration and read/channel data. | EDF/BDF quantizes within 1.1 digital steps; event times within 0.1 ms. Nanopore export does not perform basecalling. |
+| Sequences/plasmids | Sequence/case and FASTQ quality checks. Every parsed record also retains JSONL sequence, identifiers, quality arrays, annotations and GenBank feature locations/qualifiers. Gzip multi-record XDNA/maps keep separate files. | FASTA primary files cannot hold qualities/features. Writers may omit fuzzy locations or normalize annotation fields; the companion retains parsed data. Alignment-to-reads includes primary alignments only. Maps are pictures. |
+| Notebooks/structured text | Original notebook cells, metadata, outputs and attachments retain an IPYNB companion. Structured conversions keep original source bytes, including comments and scalar representation. Input code is never executed. | Scripts/HTML/PDF cannot reproduce interactive notebook behavior. Structured primary output can normalize formatting/types; unsupported structures fail. |
+| Documents/PDF/LaTeX | Paragraphs, table cells, exact numeric text and image captions across DOCX/ODT/RTF/PDF/HTML/TXT/Markdown/LaTeX; pages, assets, collisions and rollback. Both PDF-to-LaTeX modes previously compiled on a two-page sample. | Fonts, layout, equations and advanced Office objects are not universally preserved. Editable PDF-to-LaTeX does not recover equation source/tables/vectors. Layout mode embeds PDF pages. |
+| Chemistry/meshes | Representative chemistry bonds/charge/stereochemistry and mesh triangle counts/coordinates; runtime heavy-atom/bounds checks. | Not all coordinates, residues, textures, materials, topology, scene or calculation metadata are guaranteed. |
+| Audio/video | Exact decoded PCM24/32 and float32/64 audio, channels and sample rates; full sample hashes for WAV/AIFF/AU/representable FLAC. Frame/readability checks for video. | Lossy input cannot be restored. Video/compressed audio remains lossy and selects the first tracks. Every frame of long videos was not visually compared. |
 
-## Bugs fixed during validation
+## Additional defects fixed
 
-- Prevented rounding of nullable large integers during CSV, JSON and SQLite import.
-- Rejected table-to-array casts that would round integers when mixing numeric types.
-- Added exact value readback for scientific table-to-XLSX output. Precision loss rejects
-  the conversion instead of saving the rounded workbook; this check does not cover
-  every legacy Office-to-Office conversion.
-- Retained meaningful table row labels as columns and MAT logical arrays as booleans.
-- Prevented small-integer overflow during packing scale/offset arithmetic; rejected
-  packed large-integer exports that cannot safely become floating-point values.
-- Preserved HDF5 groups, empty groups and their attributes. Soft/external links and
-  hard-link aliases are rejected instead of silently disappearing.
-- Added JSON sidecars for scientific source attributes, table schema, array shapes
-  and dtype. These preserve parsed source metadata, not complete project files; not
-  every reverse converter automatically reapplies them. Keep sidecars with outputs.
-- Preserved available spike-waveform left-sweep timing and removed integer-to-float
-  coercion when adding time columns to recording CSV/TSV output.
-- Added EDF/BDF sampling-rate and event readback checks.
-- Rejected FASTQ quality clipping and PHYLIP identifier truncation; checked FASTQ
-  qualities and FASTA/FASTQ letter case after writing.
-- Preserved static PNG text/resolution metadata.
-- Removed forced stereo/16-bit conversion for WAV/AIFF/AU/FLAC. PCM codecs follow
-  decoded input precision and channel count. Full decoded-sample SHA-256 comparisons
-  reject changes; floating-point or unrepresentable FLAC exports fail safely.
-  Hash validation decodes both complete streams and adds time for large audio files.
+- Restored Leica wavelength dimensions that were previously omitted, and XZ scans
+  that previously failed. Pixel block sizes must match declared dimensions/bit depth.
+- Avoided forcing waveform loading for channels without waveforms; normalized Neo
+  annotation arrays required by real Intan recordings.
+- Prevented float32 string formatting from shortening recording CSV samples.
+- Preserved RAW sensor/Bayer information before demosaicing mutates decoder state.
+- Kept binary HDF5 strings as bytes; avoided reserved-key collisions in NPZ writing;
+  refused duplicate NPZ variables and duplicate delimited headers.
+- Added exact array readback so incompatible MAT strings and NetCDF types fail
+  before publication, instead of producing silently changed data.
+- Fixed compressed multi-record sequence filenames and icons smaller than 16 pixels.
+- Updated preservation-file references after collision renaming, without modifying
+  user-authored JSON that happens to contain similar keys.
 
 ## Scope
 
-Use `test_fidelity.py` for adversarial cases, `test_extra_formats.py` for research/code,
-`test_lab_formats.py` for lab formats and `test_any2any.py` for core/UI behavior.
-The supported-extension list describes available readers and writers, not a guarantee
-that every pair retains every input field. Read the limits in [FORMATS.md](FORMATS.md).
+Tests cover generated boundary cases and selected public acquisitions, not every
+camera/microscope brand, firmware, huge recording or damaged/proprietary variant.
+No speed comparison against other applications was performed. Preservation files
+and complete readback checks consume additional disk space, RAM and time.
 
-No real files from every camera/microscope/electrophysiology vendor, very large
-recordings, every Office equation/layout, or all corrupt/proprietary variants were
-tested. Keep originals; use numeric array/recording exports for analysis, retain their
-metadata, and check representative files from the actual instrument before replacing
-a research workflow.
+Keep originals. For analysis, prefer full numeric/recording exports and their
+metadata; validate representative files from the actual instrument before changing
+a research workflow. See [FORMATS.md](FORMATS.md) for supported readers and limits.

@@ -61,6 +61,8 @@ def read_arrays(source):
         arrays = {"data": np.load(source, allow_pickle=False)}
     elif ext == "npz":
         with np.load(source, allow_pickle=False) as archive:
+            if len(archive.files) != len(set(archive.files)):
+                raise ValueError("NPZ contains duplicate array names; no values were discarded.")
             arrays = {name: archive[name] for name in archive.files}
     elif ext in ("nc", "nc4", "netcdf"):
         import netCDF4
@@ -94,7 +96,7 @@ def read_arrays(source):
                         if name.startswith("#refs#"):
                             raise ValueError("MATLAB cell/reference arrays need a specialist exporter.")
                         strings = h5py.check_string_dtype(item.dtype)
-                        value = np.asarray(item.asstr()[()], dtype=str) if strings else item[()]
+                        value = np.asarray(item.asstr()[()], dtype=str) if strings and strings.encoding == "utf-8" and strings.length is None else item[()]
                         if ext == "mat" and "MATLAB_class" in item.attrs:
                             if item.attrs["MATLAB_class"] in (b"cell", b"struct", b"char"):
                                 raise ValueError("MATLAB v7.3 cells, structs and characters are not supported.")
@@ -131,7 +133,14 @@ def write_arrays(arrays, metadata, ext, folder, stem, check):
             path = target if len(arrays) == 1 else folder / f"{stem}_{index:04d}_{safe_name(name)}.npy"
             np.save(path, value, allow_pickle=False)
     elif ext == "npz":
-        np.savez(target, **arrays)
+        import zipfile
+        with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_STORED) as archive:
+            for name, value in arrays.items():
+                check()
+                if "\x00" in name:
+                    raise ValueError("NPZ array names cannot contain a null character.")
+                with archive.open(name + ".npy", "w", force_zip64=True) as stream:
+                    np.lib.format.write_array(stream, value, allow_pickle=False)
     elif ext == "mat":
         from scipy.io import savemat
         if any(not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,62}", key) for key in arrays):
@@ -156,7 +165,7 @@ def write_arrays(arrays, metadata, ext, folder, stem, check):
                         raise ValueError("Conflicting NetCDF dimension sizes.")
                 attrs = dict(info.get("attrs", {}))
                 fill = attrs.pop("_FillValue", None)
-                dtype = str if value.dtype.kind == "U" else ("i1" if value.dtype.kind == "b" else value.dtype)
+                dtype = str if value.dtype.kind == "U" else ("i1" if value.dtype.kind == "b" else "f4" if value.dtype == np.float16 else value.dtype)
                 variable = dataset.createVariable(name, dtype, dims, fill_value=fill)
                 variable.set_auto_maskandscale(False)
                 variable[...] = value
@@ -182,6 +191,30 @@ def write_arrays(arrays, metadata, ext, folder, stem, check):
                         variable.attrs[key] = attr
                 if "dims" in info:
                     variable.attrs["__any2any_dims__"] = json.dumps(list(info["dims"]))
+
+    if ext == "npy":
+        restored = {}
+        for index, (name, value) in enumerate(arrays.items(), 1):
+            path = target if len(arrays) == 1 else folder / f"{stem}_{index:04d}_{safe_name(name)}.npy"
+            restored[name] = np.load(path, allow_pickle=False)
+    else:
+        restored, _ = read_arrays(target)
+    if set(restored) != set(arrays):
+        raise ValueError("Array output changed variable names or counts.")
+    for name, value in arrays.items():
+        check()
+        actual = restored[name]
+        shape_ok = actual.shape == value.shape or (ext == "mat" and value.ndim <= 1 and actual.size == value.size)
+        kind_ok = actual.dtype.kind == value.dtype.kind or (ext in ("nc", "nc4", "netcdf") and value.dtype.kind == "b" and actual.dtype.kind == "i")
+        values_ok = False
+        if shape_ok:
+            actual = actual.reshape(value.shape)
+            components = ((actual.real, value.real), (actual.imag, value.imag)) if value.dtype.kind == "c" else ((actual, value),)
+            values_ok = all(np.array_equal(before, after, equal_nan=before.dtype.kind == "f") and
+                (before.dtype.kind != "f" or np.array_equal(np.signbit(before[before == 0]), np.signbit(after[before == 0])))
+                for before, after in components)
+        if not shape_ok or not kind_ok or not values_ok:
+            raise ValueError("Array output changed samples, strings or dimensions. Use NPY/NPZ/HDF5 for this data.")
 
 
 def unpack_arrays(arrays, metadata):
@@ -235,6 +268,8 @@ def read_delimited(source, ext):
             header = None
         except ValueError:
             pass
+    if header is not None and len(first) != len(set(first)):
+        raise ValueError("Delimited input has duplicate column names; no columns were renamed or discarded.")
     frame = pd.read_csv(source, sep=sep, engine="python" if sep == r"\s+" else "c",
                         header=header, dtype=str, keep_default_na=False, encoding="utf-8-sig")
     if header is None:
@@ -499,6 +534,27 @@ def convert(source, ext, folder, check):
             write_arrays(arrays, {}, ext, folder, source.stem, check)
         else:
             write_tables(tables, ext, folder, source.stem, check)
+    if ext not in ARRAYS:
+        files = [folder / f"{source.stem}.{ext}"] if ext in ("xlsx", "sqlite", "sqlite3", "db") or len(tables) == 1 else [
+            folder / f"{source.stem}_{index:04d}_{safe_name(name)}.{ext}" for index, name in enumerate(tables, 1)]
+        restored_tables = [frame for file in files for frame in read_tables(file).values()]
+        if len(restored_tables) != len(tables):
+            raise ValueError("Table output changed the number of tables.")
+        manifest["preserved_files"] = []
+        for index, ((name, frame), restored) in enumerate(zip(tables.items(), restored_tables), 1):
+            check()
+            try:
+                pd.testing.assert_frame_equal(frame.reset_index(drop=True), restored.reset_index(drop=True), check_exact=True)
+            except AssertionError:
+                backup = folder / f"preserved_table_{index:04d}.parquet"
+                while backup.exists():
+                    backup = backup.with_stem(backup.stem + "_data")
+                exact = frame.copy(deep=False)
+                exact.attrs = {}
+                exact.to_parquet(backup, index=False)
+                pd.testing.assert_frame_equal(exact, pd.read_parquet(backup), check_exact=True)
+                manifest["preserved_files"].append({"file": backup.name, "table": name,
+                    "role": "Exact typed table; the selected target cannot retain every value, name or type."})
     def encode(value):
         if isinstance(value, bytes):
             return {"encoding": "hex", "value": value.hex()}

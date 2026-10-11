@@ -7,6 +7,7 @@ Local batch file converter for Windows, with a compact English interface.
 3. Choose an output format and click **Convert**.
 
 Results go directly into the output folder. Existing files are never overwritten.
+Keep generated metadata and preservation files with the results.
 Use **More** to change the output folder, clear files or view errors.
 
 Supports documents, media, images, scientific data, code/notebooks, microscopy,

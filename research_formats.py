@@ -83,9 +83,12 @@ def molecules(source, ext, folder, check):
 def sequences(source, ext, folder, check):
     import hashlib
     import re
+    import json
     from Bio import SeqIO
+    from Bio.SeqIO.InsdcIO import _insdc_location_string
+    from imaging_formats import json_default
     source_format = SEQUENCES[source.suffix.lower().lstrip(".")]
-    with SeqIO.parse(str(source), source_format) as parser:
+    with SeqIO.parse(str(source), source_format) as parser, (folder / "sequence_metadata.jsonl").open("w", encoding="utf-8") as preserved:
         original = hashlib.sha256()
         count = 0
 
@@ -106,6 +109,16 @@ def sequences(source, ext, folder, check):
                 check()
                 if not record.seq:
                     raise ValueError("Empty sequence records cannot be converted.")
+                def encode(value):
+                    if hasattr(value, "__dict__"):
+                        return vars(value)
+                    return json_default(value)
+                features = [{"type": feature.type, "id": feature.id,
+                             "location_genbank": _insdc_location_string(feature.location, len(record)) if feature.location is not None else None,
+                             "qualifiers": feature.qualifiers} for feature in record.features]
+                preserved.write(json.dumps({"id": record.id, "name": record.name, "description": record.description,
+                    "sequence": str(record.seq), "dbxrefs": record.dbxrefs, "annotations": record.annotations,
+                    "letter_annotations": dict(record.letter_annotations), "features": features}, default=encode, ensure_ascii=False) + "\n")
                 if "molecule_type" not in record.annotations:
                     suffix = source.suffix.lower()
                     alphabet = set(str(record.seq).upper()) - set("-?")

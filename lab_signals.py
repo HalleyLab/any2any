@@ -38,7 +38,7 @@ def default(value):
     if hasattr(value, "tolist"):
         return value.tolist()
     if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
+        return {"encoding": "hex", "value": value.hex()}
     if hasattr(value, "isoformat"):
         return value.isoformat()
     return str(value)
@@ -49,6 +49,12 @@ def materialize(value):
 def neo_records(reader, check):
     import numpy as np
     kwargs = {"signal_group_mode": "split-all"} if hasattr(reader, "header") else {}
+    if hasattr(reader, "raw_annotations"):
+        for block in reader.raw_annotations["blocks"]:
+            for segment in block["segments"]:
+                for signal in segment.get("signals", []):
+                    for key, value in signal.get("__array_annotations__", {}).items():
+                        signal["__array_annotations__"][key] = np.asarray(value)
     blocks = reader.read(lazy=reader.support_lazy and type(reader).__name__ != "NWBIO", **kwargs)
     for bi, block in enumerate(blocks):
         for si, segment in enumerate(block.segments):
@@ -56,7 +62,9 @@ def neo_records(reader, check):
                                   ("spikes", segment.spiketrains), ("events", segment.events), ("epochs", segment.epochs)):
                 for index, proxy in enumerate(entries):
                     check()
-                    obj = proxy.load(load_waveforms=True) if kind == "spikes" and hasattr(proxy, "load") and "load_waveforms" in inspect.signature(proxy.load).parameters else materialize(proxy)
+                    if kind == "analog" and hasattr(proxy, "_rawio") and hasattr(proxy, "load"):
+                        proxy.dtype = "float64"
+                    obj = proxy.load(load_waveforms=True) if kind == "spikes" and hasattr(proxy, "load") and "load_waveforms" in inspect.signature(proxy.load).parameters and proxy.sampling_rate is not None else materialize(proxy)
                     key = f"block_{bi:03d}_segment_{si:03d}_{kind}_{index:04d}"
                     meta = {"kind": kind, "name": obj.name, "annotations": obj.annotations,
                             "array_annotations": obj.array_annotations, "block_annotations": block.annotations,
@@ -64,6 +72,10 @@ def neo_records(reader, check):
                             "recording_datetime": segment.rec_datetime or block.rec_datetime, "units": str(obj.units)}
                     if kind == "analog":
                         values = obj.magnitude
+                        if hasattr(proxy, "_global_channel_indexes"):
+                            channels = reader.header["signal_channels"][proxy._global_channel_indexes]
+                            meta["channel_calibration"] = [{field: channel[field].item() if hasattr(channel[field], "item") else channel[field]
+                                for field in channels.dtype.names} for channel in channels]
                         meta.update(sampling_rate_hz=float(obj.sampling_rate.rescale("Hz")), t_start_s=float(obj.t_start.rescale("s")))
                     elif kind == "irregular":
                         values = np.column_stack((obj.times.rescale("s").magnitude, obj.magnitude))
@@ -159,6 +171,7 @@ def export_data(source, ext, folder, check):
             check()
             count += 1
             values = np.asarray(values)
+            info.update(shape=values.shape, dtype=str(values.dtype))
             metadata[key] = info
             if output is not None:
                 dataset = output.create_dataset(key, data=values, chunks=True if values.size else None)
@@ -181,9 +194,9 @@ def export_data(source, ext, folder, check):
                         chunk = flat[start:start + 100000]
                         if has_time:
                             times = info["t_start_s"] + np.arange(start, start + len(chunk)) / info["sampling_rate_hz"]
-                            writer.writerows([time, *row] for time, row in zip(times, chunk))
+                            writer.writerows([time, *row.tolist()] for time, row in zip(times, chunk))
                         else:
-                            writer.writerows(chunk)
+                            writer.writerows(row.tolist() for row in chunk)
                     if info["kind"] == "waveforms":
                         info["original_shape"] = values.shape
         if not count:

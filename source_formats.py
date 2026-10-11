@@ -164,12 +164,19 @@ def convert(source, ext, folder, check):
     src = source.suffix.lower().lstrip(".")
     target = folder / f"{source.stem}.{ext}"
     check()
+    preserved = None
     if src in STRUCTURED:
         structured(source, ext, target)
+        preserved = folder / ("preserved_source." + src)
+        while preserved.exists():
+            preserved = preserved.with_stem(preserved.stem + "_original")
+        shutil.copyfile(source, preserved)
     elif src in LANGUAGES and ext in (src, "txt"):
         shutil.copyfile(source, target)
     else:
         notebook = read_notebook(source)
+        if src in NOTEBOOKS and ext != "ipynb":
+            nbformat.write(notebook, folder / "preserved_notebook.ipynb")
         if ext in LANGUAGES and LANGUAGES[ext] != notebook_language(notebook):
             raise ValueError("Notebook-to-script export must keep the original programming language.")
         if ext == "ipynb":
@@ -194,3 +201,4 @@ def convert(source, ext, folder, check):
             fmt = ("R" if ext == "r" else ext) + ":percent" if ext in LANGUAGES else ("Rmd" if ext in ("rmd", "qmd") else ext)
             target.write_text(jupytext.writes(notebook, fmt=fmt), encoding="utf-8")
     check()
+    return preserved

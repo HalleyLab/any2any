@@ -264,7 +264,8 @@ def convert(source, ext, folder, check):
             temporary.mkdir()
             research_formats.sequences(unpacked, ext, temporary, check)
             for result in temporary.iterdir():
-                result.rename(folder / (source.name.rsplit(".", 2)[0] + result.suffix))
+                stem = source.name.rsplit(".", 2)[0]
+                result.rename(folder / (stem + result.name[len("input"):] if result.name.startswith("input") else result.name))
         finally:
             unpacked.unlink(missing_ok=True)
         return

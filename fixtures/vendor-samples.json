@@ -1,0 +1,62 @@
+[
+  {
+    "name": "lif-xz.lif",
+    "url": "https://raw.githubusercontent.com/Arcadia-Science/readlif/master/tests/artifacts/xz-example/xz-example.lif",
+    "size": 2024563,
+    "sha256": "1b69f2a44d82992d675cb7b7666c32593ea688166bc887e1f1158583cad2cb1b"
+  },
+  {
+    "name": "lif-reference-c0t0.tif",
+    "url": "https://raw.githubusercontent.com/Arcadia-Science/readlif/master/tests/artifacts/xz-example/expected-outputs/c0t0.tif",
+    "size": 110933,
+    "sha256": "b72cb12d09199f878bbd5b6f5ca2ef37d27a515ffafeb92ec0e10c559b68282c"
+  },
+  {
+    "name": "lif-reference-c1t8.tif",
+    "url": "https://raw.githubusercontent.com/Arcadia-Science/readlif/master/tests/artifacts/xz-example/expected-outputs/c1t8.tif",
+    "size": 110933,
+    "sha256": "5ef9988f6eef47c9ab8946b676b38de411fd1abf60328b62a43f65b1ec7fc002"
+  },
+  {
+    "name": "lif-wavelength.lif",
+    "url": "https://raw.githubusercontent.com/Arcadia-Science/readlif/master/tests/artifacts/misc/LeicaLASX_wavelength-sweep_example.lif",
+    "size": 1149961,
+    "sha256": "53900e932752b2001ebb9492b05af31d580d3a19d9a40742b46b47fdc2c8410c"
+  },
+  {
+    "name": "abf1-tags.abf",
+    "url": "https://raw.githubusercontent.com/swharden/pyABF/main/data/abfs/multichannelAbf1WithTags.abf",
+    "size": 1244288,
+    "sha256": "d74c7882db093a8f79a194385667f35b6a1ea5e5686fd89aee475399d636493a"
+  },
+  {
+    "name": "abf2-four.abf",
+    "url": "https://raw.githubusercontent.com/swharden/pyABF/main/data/abfs/pclamp11_4ch.abf",
+    "size": 339968,
+    "sha256": "0976239ac1fb68b342713ce3db95aa93ae366aa1b0a9360e892e4ac47ae0bfbb"
+  },
+  {
+    "name": "spike2.smr",
+    "url": "https://gin.g-node.org/NeuralEnsemble/ephy_testing_data/raw/master/spike2/File_spike2_1.smr",
+    "size": 226304,
+    "sha256": "017329f9921c7e4b135af011dc99fcefd9af34918994a44656c8b99c8106ca09"
+  },
+  {
+    "name": "plexon.plx",
+    "url": "https://gin.g-node.org/NeuralEnsemble/ephy_testing_data/raw/master/plexon/File_plexon_1.plx",
+    "size": 2384416,
+    "sha256": "78b4b05485c2f683b6967fd4949ef22ad504efa17d2d06d3da8cf146fbeac54c"
+  },
+  {
+    "name": "intan.rhd",
+    "url": "https://gin.g-node.org/NeuralEnsemble/ephy_testing_data/raw/master/intan/intan_rhd_test_1.rhd",
+    "size": 12202226,
+    "sha256": "e87a8ca12cfe63fdeb73d02ff407cb1837a3a6d26a24c0dfd257c98e9533cef7"
+  },
+  {
+    "name": "nex.nex",
+    "url": "https://gin.g-node.org/NeuralEnsemble/ephy_testing_data/raw/master/neuroexplorer/File_neuroexplorer_1.nex",
+    "size": 1557276,
+    "sha256": "cb915ab74ff54b10a218a4c0388ec91a0fb7dfe95ef67ab7870ab542e0323f9f"
+  }
+]

@@ -286,6 +286,10 @@ def save_image(image, target):
         image = image.convert("RGBA")
         image.thumbnail((256, 256))
     options = {"quality": 95} if ext in (".jpg", ".webp", ".avif", ".heic") else {}
+    if ext == ".ico":
+        options["sizes"] = [image.size]
+    if ext == ".webp":
+        options.update(lossless=True, exact=True)
     if ext == ".png":
         from PIL.PngImagePlugin import PngInfo
         metadata = PngInfo()
@@ -303,6 +307,10 @@ def save_image(image, target):
 def convert_image(source, ext, folder, cancel):
     if source.suffix.lower() == ".svg":
         return convert_pages(source, ext, folder, cancel)
+    import json
+    import numpy as np
+    from imaging_formats import json_default
+    metadata = {"source_format": source.suffix, "frames": [], "preserved_files": []}
     with Image.open(source) as original:
         count = getattr(original, "n_frames", 1)
         durations, frames = [], []
@@ -312,6 +320,12 @@ def convert_image(source, ext, folder, cancel):
             check_cancel(cancel)
             original.seek(index)
             frame = ImageOps.exif_transpose(original.copy())
+            metadata["frames"].append({"mode": frame.mode, "size": frame.size, "info": frame.info, "palette": frame.getpalette()})
+            if (ext in ("jpg", "gif", "avif", "heic", "ico", "pdf", "bmp", "ppm") or
+                (frame.mode in ("P", "I", "I;16", "F") and ext not in ("png", "tiff")) or (multi and ext == "webp")):
+                backup = folder / f"frame_{index:04d}.npy"
+                np.save(backup, np.asarray(frame), allow_pickle=False)
+                metadata["preserved_files"].append({"file": backup.name, "frame": index, "role": "Original decoded image samples."})
             if multi:
                 frames.append(rgb_on_white(frame) if ext == "pdf" else frame.convert("RGBA"))
                 durations.append(original.info.get("duration", 100))
@@ -322,6 +336,8 @@ def convert_image(source, ext, folder, cancel):
             options = {"save_all": True, "append_images": frames[1:]}
             if ext in ("gif", "webp", "png", "avif"):
                 options.update(duration=durations, loop=original.info.get("loop", 0))
+            if ext == "webp":
+                options.update(lossless=True, exact=True)
             result = folder / f"{source.stem}.{ext}"
             frames[0].save(result, **options)
             if ext != "pdf":
@@ -331,6 +347,7 @@ def convert_image(source, ext, folder, cancel):
                     for index in range(count):
                         verified.seek(index)
                         verified.load()
+        (folder / "image_metadata.json").write_text(json.dumps(metadata, indent=2, default=json_default), encoding="utf-8")
 
 def convert_pages(source, ext, folder, cancel):
     with pymupdf.open(source) as document:
@@ -444,7 +461,17 @@ def convert(source, ext, output, cancel=None):
             convert_document(source, ext, folder, scratch, cancel)
         check_cancel(cancel)
         output_ext = "tex" if ext == "tex-layout" else ext
-        produced = [file for file in folder.glob(f"*.{output_ext}") if file != sidecar]
+        companions = set()
+        manifests = []
+        if converter in (scientific, imaging_formats):
+            import json
+            manifests = [sidecar] if sidecar else list(folder.glob("*.json"))
+            for manifest in manifests:
+                for item in json.loads(manifest.read_text(encoding="utf-8")).get("preserved_files", []):
+                    companions.add(folder / item["file"])
+        elif converter is None and kind == "Images" and (folder / "image_metadata.json").exists():
+            manifests = [folder / "image_metadata.json"]
+        produced = [file for file in folder.glob(f"*.{output_ext}") if file != sidecar and file not in companions]
         if not produced or any(not file.stat().st_size for file in produced):
             raise RuntimeError("No valid output was produced.")
         containers = {"docx": "word/document.xml", "xlsx": "xl/workbook.xml",
@@ -458,9 +485,9 @@ def convert(source, ext, output, cancel=None):
                 with pymupdf.open(file) as document:
                     if not document.page_count:
                         raise RuntimeError("The output PDF has no pages.")
-        return publish_files(folder, produced, source, output, cancel)
+        return publish_files(folder, produced, source, output, cancel, manifests)
 
-def publish_files(folder, produced, source, output, cancel):
+def publish_files(folder, produced, source, output, cancel, manifests):
     files = sorted(file for file in folder.rglob("*") if file.is_file())
     destinations = {}
     reserved = []
@@ -487,9 +514,16 @@ def publish_files(folder, produced, source, output, cancel):
                     index += 1
             reserved.append(candidate)
             destinations[file] = candidate
+        import json
+        for file in manifests:
+            data = json.loads(file.read_text(encoding="utf-8"))
+            for item in data.get("preserved_files", []):
+                item["file"] = destinations[folder / item["file"]].name
+            file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         replacements = {}
+        # Notebook archives are not linked resources; filenames in code must remain unchanged.
         for file in files:
-            if file not in produced:
+            if file not in produced and file.suffix.lower() != ".ipynb":
                 old = file.relative_to(folder).as_posix()
                 new = destinations[file].name
                 replacements[old] = new

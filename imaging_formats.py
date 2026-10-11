@@ -19,6 +19,11 @@ def handles(path, ext):
     return ext in targets(path)
 
 def json_default(value):
+    import dataclasses
+    if dataclasses.is_dataclass(value):
+        return dataclasses.asdict(value)
+    if isinstance(value, bytes):
+        return {"encoding": "hex", "value": value.hex()}
     if hasattr(value, "tolist"):
         return value.tolist()
     if hasattr(value, "_asdict"):
@@ -32,17 +37,23 @@ def read_images(source, check):
         import rawpy
         with rawpy.imread(str(source)) as raw:
             check()
-            rgb = raw.postprocess(use_camera_wb=True, output_bps=16)
             metadata = {"decoder": "LibRaw", "libraw_version": rawpy.libraw_version,
                         "rendering": "Demosaiced sRGB, camera white balance, 16-bit; not raw sensor values.",
-                        "black_level_per_channel": raw.black_level_per_channel, "white_level": raw.white_level}
+                        "black_level_per_channel": raw.black_level_per_channel, "white_level": raw.white_level,
+                        "color_description": raw.color_desc, "sizes": raw.sizes,
+                        "_preserved_arrays": {"sensor_visible": raw.raw_image_visible.copy(),
+                                              "raw_pattern": raw.raw_pattern.copy() if raw.raw_pattern is not None else np.empty(0, dtype="uint8")}}
+            rgb = raw.postprocess(use_camera_wb=True, output_bps=16)
             yield rgb, "YXS", metadata
     elif ext == "nd2":
         import nd2
         with nd2.ND2File(source) as image:
             check()
             yield image.asarray(), "".join(image.sizes), {"voxel_size_um": image.voxel_size(),
-                                                          "metadata": image.metadata, "sizes": image.sizes}
+                                                          "metadata": image.metadata, "sizes": image.sizes,
+                                                          "experiment": image.experiment, "text_info": image.text_info,
+                                                          "events": image.events(orient="records"), "rois": image.rois,
+                                                          "frame_metadata": [image.frame_metadata(i) for i in range(image._frame_count)]}
     elif ext == "czi":
         import czifile
         with czifile.CziFile(source) as image:
@@ -56,13 +67,24 @@ def read_images(source, check):
         image_file = LifFile(str(source))
         for image in image_file.get_iter_image():
             check()
-            shape = (image.dims.m, image.dims.t, image.dims.z, image.channels, image.dims.y, image.dims.x)
+            if image.channel_as_second_dim or len(set(image.bit_depth)) != 1:
+                raise ValueError("This LIF channel layout cannot be decoded safely by the installed reader.")
+            dimensions = [dim for dim in reversed(image.dims_n) if dim not in image.display_dims]
+            shape = tuple(image.dims_n[dim] for dim in dimensions) + (image.channels,) + tuple(image.dims_n[dim] for dim in reversed(image.display_dims))
+            axis_names = {1: "X", 2: "Y", 3: "Z", 4: "T", 5: "L", 6: "A", 7: "B", 8: "D", 9: "E", 10: "P"}
+            axes = "".join(axis_names[dim] for dim in dimensions) + "C" + "".join(axis_names[dim] for dim in reversed(image.display_dims))
+            bytes_per_sample = 1 if image.bit_depth[0] == 8 else 2
+            if not 8 <= image.bit_depth[0] <= 16 or image.offsets[1] != int(np.prod(shape)) * bytes_per_sample:
+                raise ValueError("LIF pixel block size does not match its declared dimensions and bit depth.")
             frames = []
-            for m, t, z, c in itertools.product(*(range(dim) for dim in shape[:4])):
+            # The indexed reader retains spectral axes and avoids get_plane's 16-bit channel offset bug.
+            for index in range(int(np.prod(shape[:-2]))):
                 check()
-                frames.append(np.asarray(image.get_frame(z=z, t=t, c=c, m=m)))
-            yield np.stack(frames).reshape(shape), "PTZCYX", {"name": image.name, "scale": image.scale,
-                                                             "scale_units": "pixels per micrometer; time scale per second", "bit_depth": image.bit_depth}
+                frames.append(np.asarray(image._get_item(index)))
+            yield np.stack(frames).reshape(shape), axes, {"name": image.name, "scale": image.scale,
+                "scale_units": "pixels per micrometer; time scale per second", "bit_depth": image.bit_depth,
+                "dimensions": image.dims_n, "dimension_scales": image.scale_n, "display_dimensions": image.display_dims,
+                "leica_xml": image_file.xml_header}
     elif ext in ("mrc", "mrcs", "map", "rec"):
         import mrcfile
         with mrcfile.open(source, permissive=False) as image:
@@ -86,10 +108,13 @@ def read_images(source, check):
                 check()
                 yield series.asarray(), series.axes, {"description": series.pages[0].description,
                                                      "ome_xml": image.ome_metadata, "lsm_metadata": image.lsm_metadata,
+                                                     "_preserved_arrays": {f"pyramid_{index}": level.asarray() for index, level in enumerate(series.levels[1:], 1)},
                                                      "resolution": {tag: series.pages[0].tags[tag].value for tag in ("XResolution", "YResolution", "ResolutionUnit") if tag in series.pages[0].tags}}
 
 def planes(data, axes):
     import numpy as np
+    if "Y" not in axes and axes.endswith("ZX"):
+        axes = axes[:-2] + "YX"
     if data.ndim != len(axes) or "Y" not in axes or "X" not in axes:
         raise ValueError(f"Cannot identify image axes: {axes}, shape {data.shape}.")
     rgb = "S" in axes and data.shape[axes.index("S")] in (3, 4)
@@ -118,6 +143,13 @@ def convert(source, ext, folder, check):
             if not data.size or data.dtype.kind not in "buif":
                 raise ValueError("Only non-empty real numeric image arrays can be exported.")
             stem = f"{source.stem}_{count:04d}"
+            preserved = metadata.pop("_preserved_arrays", {})
+            needs_samples = (ext == "jpg" or
+                (ext in ("webp", "bmp") and (data.dtype != np.uint8 or
+                    ("S" in axes and data.shape[axes.index("S")] == 4 and ext == "bmp"))) or
+                (ext == "png" and data.dtype not in (np.dtype("uint8"), np.dtype("uint16"))))
+            if needs_samples:
+                preserved["image"] = data
             metadata.update(axes=axes, shape=data.shape, dtype=str(data.dtype), source_format=source.suffix, series_index=count)
             target = folder / f"{stem}.{ext}"
             if ext == "tiff":
@@ -160,9 +192,14 @@ def convert(source, ext, folder, check):
                         image = Image.fromarray(preview(plane, limits))
                         if ext in ("jpg", "bmp") and image.mode == "RGBA":
                             image = image.convert("RGB")
-                        image.save(result, **({"quality": 95} if ext in ("jpg", "webp") else {}))
+                        options = {"quality": 95} if ext == "jpg" else {"lossless": True, "exact": True} if ext == "webp" else {}
+                        image.save(result, **options)
                         with Image.open(result) as restored:
                             restored.load()
+            if preserved:
+                backup = folder / f"{stem}_preserved.npz"
+                np.savez(backup, **preserved, metadata_json=np.array(json.dumps(metadata, default=json_default)))
+                metadata["preserved_files"] = [{"file": backup.name, "role": "Original numeric samples, RAW sensor mosaic or pyramid levels."}]
             (folder / f"{stem}.json").write_text(json.dumps(metadata, indent=2, default=json_default), encoding="utf-8")
             check()
     if not count:
