@@ -11,7 +11,7 @@ Use **More** to change the output folder, clear files or view errors.
 
 Supports documents, media, images, scientific data, code/notebooks, microscopy,
 sequences/plasmids and electrophysiology. PDF-to-LaTeX offers editable text and
-layout-preserving modes. See [formats and limitations](FORMATS.md).
+layout-preserving modes. See [formats](FORMATS.md) and [fidelity checks](FIDELITY.md).
 
 ## Setup
 

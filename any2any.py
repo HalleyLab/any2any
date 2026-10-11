@@ -65,15 +65,15 @@ for converter in EXTRA_CONVERTERS:
 
 AUDIO = {
     "mp3": ["-c:a", "libmp3lame", "-q:a", "2"],
-    "wav": ["-c:a", "pcm_s16le"], "flac": ["-c:a", "flac"],
+    "wav": [], "flac": [],  # Lossless codecs follow the original decoded precision.
     "m4a": ["-c:a", "aac", "-b:a", "192k"],
     "aac": ["-c:a", "aac", "-b:a", "192k"],
     "ogg": ["-c:a", "libvorbis", "-q:a", "5"],
     "opus": ["-c:a", "libopus", "-b:a", "128k"],
-    "aiff": ["-c:a", "pcm_s16be"],
+    "aiff": [],
     "wma": ["-c:a", "wmav2", "-b:a", "192k"],
     "ac3": ["-c:a", "ac3", "-b:a", "384k", "-ar", "48000"],
-    "au": ["-c:a", "pcm_s16be"],
+    "au": [],
 }
 VIDEO = {
     "mp4": ["-c:v", "libx264", "-crf", "20", "-c:a", "aac", "-movflags", "+faststart"],
@@ -287,7 +287,14 @@ def save_image(image, target):
         image.thumbnail((256, 256))
     options = {"quality": 95} if ext in (".jpg", ".webp", ".avif", ".heic") else {}
     if ext == ".png":
-        options["compress_level"] = 3
+        from PIL.PngImagePlugin import PngInfo
+        metadata = PngInfo()
+        for key, value in image.info.items():
+            if isinstance(value, str):
+                metadata.add_text(key, value)
+        options.update(compress_level=3, pnginfo=metadata)
+    if ext in (".png", ".jpg", ".tiff", ".pdf") and "dpi" in image.info:
+        options["dpi"] = image.info["dpi"]
     image.save(target, **options)
     if ext != ".pdf":
         with Image.open(target) as verified:
@@ -376,11 +383,31 @@ def convert_media(source, ext, folder, cancel):
         codec = {"srt": "srt", "vtt": "webvtt", "ass": "ass", "ssa": "ass"}[ext]
         args += ["-map", "0:s:0", "-c:s", codec]
     elif ext in AUDIO:
-        args += ["-map", "0:a:0", "-vn", "-ac", "2"] + AUDIO[ext]
+        if ext in ("wav", "aiff", "au", "flac"):
+            info = run_command([ffmpeg, "-hide_banner", "-nostdin", "-protocol_whitelist", "file,pipe,data,crypto", "-i", source,
+                                "-map", "0:a:0", "-af", "ashowinfo", "-frames:a", "1", "-f", "null", "-"], cancel)
+            match = re.search(r"fmt:(\w+) channels:(\d+) .*?rate:(\d+)", info)
+            if not match:
+                raise ValueError("Could not determine the original audio precision and channels.")
+            sample_format, channels, rate = match.groups()
+            sample_format = sample_format.rstrip("p")
+            codec = {"u8": "pcm_s16", "s16": "pcm_s16", "s32": "pcm_s32", "flt": "pcm_f32", "dbl": "pcm_f64"}.get(sample_format)
+            if codec is None or (ext == "flac" and sample_format in ("flt", "dbl")):
+                raise ValueError("This audio precision cannot be kept in the selected format. Use WAV or AIFF.")
+            options = ["-c:a", "flac"] if ext == "flac" else ["-c:a", codec + ("le" if ext == "wav" else "be")]
+            args += ["-map", "0:a:0", "-vn", "-ac", channels, "-ar", rate] + options
+        else:
+            args += ["-map", "0:a:0", "-vn", "-ac", "2"] + AUDIO[ext]
     else:
         args += ["-map", "0:v:0", "-map", "0:a:0?", "-sn", "-dn", "-ac", "2",
                  "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-pix_fmt", "yuv420p"] + VIDEO[ext]
     run_command(args + [result], cancel)
+    if ext in ("wav", "aiff", "au", "flac"):
+        hashes = [run_command([ffmpeg, "-v", "error", "-nostdin", "-protocol_whitelist", "file,pipe,data,crypto", "-i", path,
+                               "-map", "0:a:0", "-vn", "-c:a", "pcm_f64le", "-f", "hash", "-hash", "sha256", "-"], cancel)
+                  for path in (source, result)]
+        if hashes[0] != hashes[1]:
+            raise ValueError("Audio output changed decoded samples. Use WAV or AIFF for this precision.")
     if category(source) != "Subtitles":
         run_command([ffmpeg, "-v", "error", "-xerror", "-nostdin", "-i", result,
                      "-t", "1", "-f", "null", "-"], cancel, timeout=120)
@@ -398,6 +425,7 @@ def convert(source, ext, output, cancel=None):
     with tempfile.TemporaryDirectory(prefix="any2any-") as scratch_name, \
          tempfile.TemporaryDirectory(prefix=".any2any-", dir=output.parent) as staging_name:
         folder, scratch = Path(staging_name), Path(scratch_name)
+        sidecar = None
         converter = next((module for module in EXTRA_CONVERTERS if module.handles(source, ext)), None)
         if converter is not None:
             input_source = source
@@ -405,7 +433,7 @@ def convert(source, ext, output, cancel=None):
                 prepared = scratch / "tables"
                 prepared.mkdir()
                 input_source = office_convert(source, "xlsx", prepared, scratch, cancel)
-            converter.convert(input_source, ext, folder, lambda: check_cancel(cancel))
+            sidecar = converter.convert(input_source, ext, folder, lambda: check_cancel(cancel))
         elif kind in ("Video", "Audio", "Subtitles"):
             convert_media(source, ext, folder, cancel)
         elif kind == "Images":
@@ -416,7 +444,7 @@ def convert(source, ext, output, cancel=None):
             convert_document(source, ext, folder, scratch, cancel)
         check_cancel(cancel)
         output_ext = "tex" if ext == "tex-layout" else ext
-        produced = list(folder.glob(f"*.{output_ext}"))
+        produced = [file for file in folder.glob(f"*.{output_ext}") if file != sidecar]
         if not produced or any(not file.stat().st_size for file in produced):
             raise RuntimeError("No valid output was produced.")
         containers = {"docx": "word/document.xml", "xlsx": "xl/workbook.xml",

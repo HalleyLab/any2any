@@ -64,7 +64,11 @@ def main():
                        "-t", "0.4", "-c:v", "libx264", "-c:a", "aac", "-f", "mp4", video])
         for ext in a.VIDEO:
             check(video, ext)
-        wav = check(video, "wav")
+        check(video, "wav")
+        # FLAC needs integer PCM; float-rejection cases live in test_fidelity.py.
+        wav = base / "audio.wav"
+        a.run_command([a.imageio_ffmpeg.get_ffmpeg_exe(), "-v", "error", "-f", "lavfi",
+                       "-i", "sine=frequency=440", "-t", "0.4", "-c:a", "pcm_s24le", wav])
         for ext in a.AUDIO:
             check(wav, ext)
 

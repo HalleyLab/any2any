@@ -56,7 +56,7 @@ def checked_array(value):
 def read_arrays(source):
     import numpy as np
     ext = source.suffix.lower().lstrip(".")
-    metadata = {"attrs": {}, "variables": {}}
+    metadata = {"attrs": {}, "variables": {}, "groups": {}}
     if ext == "npy":
         arrays = {"data": np.load(source, allow_pickle=False)}
     elif ext == "npz":
@@ -79,13 +79,17 @@ def read_arrays(source):
     else:
         import h5py
         if ext == "mat" and not h5py.is_hdf5(source):
-            from scipy.io import loadmat
-            arrays = {key: value for key, value in loadmat(source).items() if not key.startswith("__")}
+            from scipy.io import loadmat, whosmat
+            logical = {key for key, _, kind in whosmat(source) if kind == "logical"}
+            arrays = {key: value.astype(bool) if key in logical else value
+                      for key, value in loadmat(source).items() if not key.startswith("__")}
         else:
             arrays = {}
             with h5py.File(source, "r") as dataset:
                 metadata["attrs"] = dict(dataset.attrs)
                 def visit(name, item):
+                    if isinstance(item, h5py.Group):
+                        metadata["groups"][name] = dict(item.attrs)
                     if isinstance(item, h5py.Dataset):
                         if name.startswith("#refs#"):
                             raise ValueError("MATLAB cell/reference arrays need a specialist exporter.")
@@ -101,6 +105,17 @@ def read_arrays(source):
                         metadata["variables"][name] = {"attrs": attrs}
                         if dims is not None:
                             metadata["variables"][name]["dims"] = json.loads(dims)
+                seen = set()
+                def check_link(name, link):
+                    if not isinstance(link, h5py.HardLink):
+                        return "HDF5 soft/external links need a specialist exporter; no links were discarded."
+                    address = h5py.h5o.get_info(dataset[name].id).addr
+                    if address in seen:
+                        return "HDF5 hard-link aliases need a specialist exporter; no aliases were discarded."
+                    seen.add(address)
+                issue = dataset.visititems_links(check_link)
+                if issue:
+                    raise ValueError(issue)
                 dataset.visititems(visit)
     if not arrays:
         raise ValueError("No supported arrays were found.")
@@ -152,6 +167,10 @@ def write_arrays(arrays, metadata, ext, folder, stem, check):
         with h5py.File(target, "w") as dataset:
             for key, value in metadata.get("attrs", {}).items():
                 dataset.attrs[key] = value
+            for name, attrs in metadata.get("groups", {}).items():
+                group = dataset.require_group(name)
+                for key, value in attrs.items():
+                    group.attrs[key] = value
             for name, value in arrays.items():
                 check()
                 data = value.astype(object) if value.dtype.kind == "U" else value
@@ -175,10 +194,13 @@ def unpack_arrays(arrays, metadata):
             if key in attrs:
                 mask |= np.isin(value, np.atleast_1d(attrs[key]))
         if value.dtype.kind in "biufc":
-            if mask.any() and value.dtype.kind in "iu" and (np.abs(value.astype(object)) > 2**53).any():
-                raise ValueError("Missing-value export would lose precision in large integers. Keep NetCDF or HDF5.")
             if str(attrs.get("_Unsigned", "")).lower() == "true" and value.dtype.kind == "i":
                 value = value.view(np.dtype(value.dtype.str.replace("i", "u")))
+            packed = "scale_factor" in attrs or "add_offset" in attrs
+            if (mask.any() or packed) and value.dtype.kind in "iu" and (np.abs(value.astype(object)) > 2**53).any():
+                raise ValueError("Packing/missing-value export would lose precision in large integers. Keep NetCDF or HDF5.")
+            if packed:
+                value = value.astype(np.result_type(value.dtype, np.float64))
             if "scale_factor" in attrs:
                 value = value * attrs["scale_factor"]
             if "add_offset" in attrs:
@@ -221,9 +243,24 @@ def read_delimited(source, ext):
         values = frame[column]
         if values.str.match(r"^[+-]?0\d+").any():
             continue
+        present = values[values != ""]
+        if len(present) and present.str.fullmatch(r"[+-]?\d+").all():
+            integers = [int(value) for value in present]
+            if min(integers) >= -(2**63) and max(integers) < 2**63:
+                frame[column] = pd.array(values.replace("", None), dtype="Int64")
+            elif min(integers) >= 0 and max(integers) < 2**64:
+                frame[column] = pd.array(values.replace("", None), dtype="UInt64")
+            continue
         try:
             numeric = pd.to_numeric(values.replace("", None), errors="raise")
-            frame[column] = values.replace("", None).to_numpy(dtype=float) if pd.api.types.is_float_dtype(numeric.dtype) else numeric
+            if pd.api.types.is_float_dtype(numeric.dtype):
+                converted = values.replace("", None).to_numpy(dtype=float)
+                if any(re.fullmatch(r"[+-]?\d+", raw) and int(raw) != float(value)
+                       for raw, value in zip(values, converted)):
+                    continue
+                frame[column] = converted
+            else:
+                frame[column] = numeric
         except (ValueError, TypeError):
             pass
     return frame
@@ -253,13 +290,36 @@ def read_prism(source):
         raise ValueError("No Prism data tables were found. Binary Prism projects are not supported.")
     return result
 
+def json_frame(data):
+    import numpy as np
+    import pandas as pd
+    frame = pd.DataFrame(data, dtype=object)
+    for column in frame:
+        values = frame[column].tolist()
+        present = [value for value in values if value is not None]
+        if not present:
+            continue
+        if all(isinstance(value, bool) for value in present):
+            frame[column] = pd.array(values, dtype="boolean")
+        elif all(isinstance(value, int) and not isinstance(value, bool) for value in present):
+            if min(present) >= -(2**63) and max(present) < 2**63:
+                frame[column] = pd.array(values, dtype="Int64")
+            elif min(present) >= 0 and max(present) < 2**64:
+                frame[column] = pd.array(values, dtype="UInt64")
+        elif all(isinstance(value, (int, float)) for value in present):
+            converted = np.array([np.nan if value is None else value for value in values], dtype=float)
+            if all(before is None or before == float(after) for before, after in zip(values, converted)):
+                frame[column] = pd.array(converted, dtype="Float64")
+    return frame
+
+
 def read_tables(source):
     import pandas as pd
     ext = source.suffix.lower().lstrip(".")
     if ext in ("csv", "tsv", "dat", "asc"):
         result = {"data": read_delimited(source, ext)}
     elif ext == "xlsx":
-        result = {name: frame.infer_objects() for name, frame in pd.read_excel(source, sheet_name=None, engine="openpyxl", dtype=object).items()}
+        result = {name: frame.infer_objects() for name, frame in pd.read_excel(source, sheet_name=None, engine="openpyxl", dtype=object, keep_default_na=False).items()}
     elif ext in ("parquet", "pq"):
         result = {"data": pd.read_parquet(source)}
     elif ext in ("feather", "arrow"):
@@ -267,9 +327,22 @@ def read_tables(source):
     elif ext in ("json", "jsonl", "ndjson"):
         if ext == "json":
             data = json.loads(source.read_text(encoding="utf-8-sig"))
-            result = {"data": pd.read_json(source, orient="table", precise_float=True)} if isinstance(data, dict) and "schema" in data and "data" in data else {"data": pd.DataFrame(data)}
+            if isinstance(data, dict) and "schema" in data and "data" in data:
+                from pandas.io.json._table_schema import convert_json_field_to_pandas_type
+                fields = data["schema"]["fields"]
+                frame = pd.DataFrame(data["data"], columns=[field["name"] for field in fields], dtype=object)
+                for field in fields:
+                    dtype = convert_json_field_to_pandas_type(field)
+                    if field["type"] == "datetime":
+                        frame[field["name"]] = pd.to_datetime(frame[field["name"]], utc=bool(field.get("tz"))).astype(dtype)
+                    else:
+                        frame[field["name"]] = frame[field["name"]].astype(dtype)
+                result = {"data": frame}
+            else:
+                result = {"data": json_frame(data)}
         else:
-            result = {"data": pd.read_json(source, orient="records", lines=True, dtype=False, convert_dates=False, precise_float=True)}
+            data = [json.loads(line) for line in source.read_text(encoding="utf-8-sig").splitlines() if line.strip()]
+            result = {"data": json_frame(data)}
     elif ext in ("sav", "zsav", "por", "dta", "xpt", "sas7bdat"):
         import pyreadstat
         reader = {"sav": pyreadstat.read_sav, "zsav": pyreadstat.read_sav, "por": pyreadstat.read_por,
@@ -287,13 +360,16 @@ def read_tables(source):
     elif ext in ("sqlite", "sqlite3", "db"):
         with closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True)) as connection:
             names = [row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
-            result = {name: pd.read_sql_query('SELECT * FROM "' + name.replace('"', '""') + '"', connection) for name in names}
+            result = {name: pd.read_sql_query('SELECT * FROM "' + name.replace('"', '""') + '"', connection, dtype_backend="numpy_nullable") for name in names}
     elif ext == "pzfx":
         result = read_prism(source)
     else:
         raise ValueError("Unsupported scientific table input.")
     if not result or any(not isinstance(frame, pd.DataFrame) or len(frame.columns) == 0 for frame in result.values()):
         raise ValueError("No supported rectangular data tables were found.")
+    for name, frame in result.items():
+        if frame.index.name is not None or not frame.index.equals(pd.RangeIndex(len(frame))):
+            result[name] = frame.reset_index()
     return result
 
 def write_tables(tables, ext, folder, stem, check):
@@ -310,6 +386,13 @@ def write_tables(tables, ext, folder, stem, check):
                     for cell in row:
                         if cell.data_type == "f":
                             cell.data_type = "s"
+        restored = read_tables(target)
+        for expected, actual in zip(tables.values(), restored.values()):
+            try:
+                pd.testing.assert_frame_equal(expected.reset_index(drop=True), actual.reset_index(drop=True),
+                                              check_dtype=False, check_exact=True, check_names=False)
+            except AssertionError as error:
+                raise ValueError("Excel output changed table values or precision. Use Parquet or HDF5 instead.") from error
         return
     if ext in ("sqlite", "sqlite3", "db"):
         with closing(sqlite3.connect(target)) as connection:
@@ -378,6 +461,8 @@ def convert(source, ext, folder, check):
     check()
     if src_ext in ARRAYS:
         arrays, metadata = read_arrays(source)
+        manifest = {"source_metadata": metadata, "arrays": {name: {"shape": value.shape, "dtype": str(value.dtype)}
+                    for name, value in arrays.items()}, "note": "Non-HDF5/NetCDF exports unpack scale/offset and missing values; MAT uses column vectors."}
         if ext not in ("h5", "hdf5", "hdf", "nc", "nc4", "netcdf"):
             arrays = unpack_arrays(arrays, metadata)
         if ext in ARRAYS:
@@ -393,13 +478,40 @@ def convert(source, ext, folder, check):
             write_tables(tables, ext, folder, source.stem, check)
     else:
         tables = read_tables(source)
+        if any(not frame.columns.is_unique for frame in tables.values()):
+            raise ValueError("Duplicate table columns cannot be exported safely.")
+        manifest = {"tables": {name: {"columns": list(frame.columns), "dtypes": [str(dtype) for dtype in frame.dtypes],
+                                     "attrs": frame.attrs} for name, frame in tables.items()}}
         if ext in ARRAYS:
             arrays = {}
             for name, frame in tables.items():
                 if not all(pd.api.types.is_numeric_dtype(dtype) for dtype in frame.dtypes):
                     raise ValueError("Array exports require numeric table columns. Use Parquet, Excel or statistical formats for mixed data.")
-                arrays[name] = frame.to_numpy()
+                dtype = np.result_type(*[getattr(dtype, "numpy_dtype", dtype) for dtype in frame.dtypes])
+                if frame.isna().any().any() and dtype.kind in "biu":
+                    dtype = np.dtype("float64")
+                values = frame.to_numpy(dtype=dtype, na_value=np.nan)
+                for index, column in enumerate(frame):
+                    if any(before != after for before, after in zip(frame[column].dropna().tolist(),
+                           values[frame[column].notna().to_numpy(), index].tolist())):
+                        raise ValueError("Combining these columns would lose numeric precision. Use Parquet or separate arrays.")
+                arrays[name] = values
             write_arrays(arrays, {}, ext, folder, source.stem, check)
         else:
             write_tables(tables, ext, folder, source.stem, check)
+    def encode(value):
+        if isinstance(value, bytes):
+            return {"encoding": "hex", "value": value.hex()}
+        if isinstance(value, complex):
+            return {"real": value.real, "imag": value.imag}
+        if hasattr(value, "tolist"):
+            return value.tolist()
+        if hasattr(value, "isoformat"):
+            return value.isoformat()
+        raise TypeError("Unsupported scientific metadata type: " + type(value).__name__)
+    sidecar = folder / "metadata.json"
+    while sidecar.exists():
+        sidecar = sidecar.with_stem(sidecar.stem + "_metadata")
+    sidecar.write_text(json.dumps(manifest, indent=2, default=encode), encoding="utf-8")
     check()
+    return sidecar

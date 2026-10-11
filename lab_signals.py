@@ -60,7 +60,8 @@ def neo_records(reader, check):
                     key = f"block_{bi:03d}_segment_{si:03d}_{kind}_{index:04d}"
                     meta = {"kind": kind, "name": obj.name, "annotations": obj.annotations,
                             "array_annotations": obj.array_annotations, "block_annotations": block.annotations,
-                            "segment_annotations": segment.annotations, "units": str(obj.units)}
+                            "segment_annotations": segment.annotations, "block_name": block.name, "segment_name": segment.name,
+                            "recording_datetime": segment.rec_datetime or block.rec_datetime, "units": str(obj.units)}
                     if kind == "analog":
                         values = obj.magnitude
                         meta.update(sampling_rate_hz=float(obj.sampling_rate.rescale("Hz")), t_start_s=float(obj.t_start.rescale("s")))
@@ -78,7 +79,8 @@ def neo_records(reader, check):
                             meta.update(t_start_s=float(obj.t_start.rescale("s")), t_stop_s=float(obj.t_stop.rescale("s")))
                             if obj.waveforms is not None:
                                 yield key + "_waveforms", obj.waveforms.magnitude, {"kind": "waveforms", "units": str(obj.waveforms.units),
-                                                                                  "sampling_rate_hz": float(obj.sampling_rate.rescale("Hz")), "spike_times_key": key}
+                                                                                  "sampling_rate_hz": float(obj.sampling_rate.rescale("Hz")), "spike_times_key": key,
+                                                                                  "left_sweep_s": None if obj.left_sweep is None else float(obj.left_sweep.rescale("s"))}
                     yield key, values, meta
 
 def records(source, check):
@@ -179,8 +181,9 @@ def export_data(source, ext, folder, check):
                         chunk = flat[start:start + 100000]
                         if has_time:
                             times = info["t_start_s"] + np.arange(start, start + len(chunk)) / info["sampling_rate_hz"]
-                            chunk = np.column_stack((times, chunk))
-                        writer.writerows(chunk)
+                            writer.writerows([time, *row] for time, row in zip(times, chunk))
+                        else:
+                            writer.writerows(chunk)
                     if info["kind"] == "waveforms":
                         info["original_shape"] = values.shape
         if not count:
@@ -254,8 +257,15 @@ def export_edf(source, ext, folder, check):
         for index, signal in enumerate(samples):
             check()
             tolerance = (restored.getPhysicalMaximum(index) - restored.getPhysicalMinimum(index)) / (restored.getDigitalMaximum(index) - restored.getDigitalMinimum(index)) * 1.1
+            if not math.isclose(restored.getSampleFrequency(index), headers[index]["sample_frequency"], rel_tol=0, abs_tol=1e-9):
+                raise ValueError("EDF/BDF output changed the sampling rate. Use HDF5 or NPZ.")
             if restored.getNSamples()[index] != len(signal) or not np.allclose(restored.readSignal(index), signal, rtol=0, atol=tolerance):
                 raise ValueError("EDF/BDF output exceeded its calibration quantization tolerance.")
+        onsets, lengths, labels = restored.readAnnotations()
+        if labels.tolist() != [row[2] for row in annotations] or (annotations and
+                (not np.allclose(onsets, [row[0] for row in annotations], rtol=0, atol=1e-4) or
+                 not np.allclose(lengths, [row[1] for row in annotations], rtol=0, atol=1e-4))):
+            raise ValueError("EDF/BDF output changed event annotations beyond 0.1 ms. Use HDF5 or NPZ.")
     metadata["export_note"] = "EDF/BDF quantizes samples; names are ASCII and at most 16 characters. Original metadata is retained here."
     (folder / "metadata.json").write_text(json.dumps(metadata, indent=2, default=default), encoding="utf-8")
 

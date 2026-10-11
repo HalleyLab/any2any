@@ -163,6 +163,8 @@ def genomic(source, ext, folder, check):
                 if ext == "fastq":
                     if qual == "*" or len(qual) != len(seq):
                         raise ValueError("FASTQ needs stored quality scores; scores are never invented.")
+                    if any(not 33 <= ord(value) <= 126 for value in qual):
+                        raise ValueError("Sanger FASTQ requires PHRED scores from 0 to 93; quality clipping is not allowed.")
                     output.write(f"@{name}\n{seq}\n+\n{qual}\n")
                 else:
                     output.write(f">{name}\n{seq}\n")

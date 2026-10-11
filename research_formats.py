@@ -90,8 +90,15 @@ def sequences(source, ext, folder, check):
         count = 0
 
         def update(digest, record):
-            sequence = str(record.seq).upper().encode("ascii")
-            digest.update(str(len(sequence)).encode("ascii") + b":" + sequence)
+            sequence = str(record.seq)
+            sequence = sequence if ext in ("fasta", "fa", "fastq", "fq") else sequence.upper()
+            encoded = sequence.encode("ascii")
+            digest.update(str(len(encoded)).encode("ascii") + b":" + encoded)
+            if ext in ("fastq", "fq"):
+                qualities = record.letter_annotations.get("phred_quality")
+                if qualities is None or any(not isinstance(value, int) or not 0 <= value <= 93 for value in qualities):
+                    raise ValueError("Sanger FASTQ requires measured integer PHRED scores from 0 to 93; quality clipping is not allowed.")
+                digest.update(b":" + bytes(qualities))
 
         def records():
             nonlocal count
@@ -116,6 +123,8 @@ def sequences(source, ext, folder, check):
                 if record.id.startswith("<unknown"):
                     record.id = re.sub(r"[^A-Za-z0-9_.-]", "_", source.stem) + f"_{count + 1}"
                     record.name = record.id
+                if ext == "phy" and len(record.id) > 10:
+                    raise ValueError("PHYLIP cannot preserve identifiers longer than 10 characters. Use FASTA or NEXUS.")
                 count += 1
                 update(original, record)
                 yield record
