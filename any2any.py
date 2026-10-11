@@ -21,6 +21,12 @@ import pymupdf
 from PIL import Image, ImageOps
 import pillow_heif
 
+import scientific
+import source_formats
+import research_formats
+
+EXTRA_CONVERTERS = (source_formats, scientific, research_formats)
+
 ROOT = Path(__file__).resolve().parent
 pillow_heif.register_heif_opener()
 Image.init()
@@ -46,6 +52,11 @@ OUTPUTS = {
     "PDF/Pages": "png jpg webp tiff svg txt pdf",
     "Subtitles": "srt vtt ass ssa",
 }
+EXTRA_CATEGORIES = {kind for converter in EXTRA_CONVERTERS for kind in converter.INPUTS}
+for converter in EXTRA_CONVERTERS:
+    INPUTS.update(converter.INPUTS)
+    OUTPUTS.update(converter.OUTPUTS)
+
 AUDIO = {
     "mp3": ["-c:a", "libmp3lame", "-q:a", "2"],
     "wav": ["-c:a", "pcm_s16le"], "flac": ["-c:a", "flac"],
@@ -91,7 +102,10 @@ def category(path):
 
 def targets(path):
     kind = category(path)
-    return OUTPUTS[kind].split() if kind else []
+    result = OUTPUTS[kind].split() if kind and kind not in EXTRA_CATEGORIES else []
+    for converter in EXTRA_CONVERTERS:
+        result.extend(converter.targets(path))
+    return list(dict.fromkeys(result))
 
 def soffice():
     candidates = [ROOT / "tools/libreoffice/program/soffice.exe"]
@@ -364,7 +378,15 @@ def convert(source, ext, output, cancel=None):
     with tempfile.TemporaryDirectory(prefix="any2any-") as scratch_name, \
          tempfile.TemporaryDirectory(prefix=".any2any-", dir=output.parent) as staging_name:
         folder, scratch = Path(staging_name), Path(scratch_name)
-        if kind in ("Video", "Audio", "Subtitles"):
+        converter = next((module for module in EXTRA_CONVERTERS if module.handles(source, ext)), None)
+        if converter is not None:
+            input_source = source
+            if converter is scientific and scientific.needs_office(source):
+                prepared = scratch / "tables"
+                prepared.mkdir()
+                input_source = office_convert(source, "xlsx", prepared, scratch, cancel)
+            converter.convert(input_source, ext, folder, lambda: check_cancel(cancel))
+        elif kind in ("Video", "Audio", "Subtitles"):
             convert_media(source, ext, folder, cancel)
         elif kind == "Images":
             convert_image(source, ext, folder, cancel)
