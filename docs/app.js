@@ -8,8 +8,15 @@ function connected(value) {
   $("connection").classList.toggle("connected", value);
   $("connection").querySelector("span").textContent = value ? "Local engine" : "Connect";
 }
+async function engineFetch(path, options = {}) {
+  try {return await fetch(engine + path, {targetAddressSpace: "loopback", ...options});}
+  catch (error) {
+    connected(false);
+    throw new Error("Local engine unavailable. Check the app and browser permissions.");
+  }
+}
 async function api(path, options = {}) {
-  const response = await fetch(engine + path, {targetAddressSpace: "loopback", ...options,
+  const response = await engineFetch(path, {...options,
     headers: {"X-Any2Any-Token": token, ...options.headers}});
   if (!response.ok) {
     const body = await response.json();
@@ -20,7 +27,7 @@ async function api(path, options = {}) {
   return response.json();
 }
 async function connect() {
-  const response = await fetch(engine + "/api/health", {targetAddressSpace: "loopback"});
+  const response = await engineFetch("/api/health");
   if (!response.ok) throw new Error("Connection refused.");
   const data = await response.json();
   if (data.app !== "Any2Any" || !data.token) throw new Error("Any2Any is not running on this port.");
@@ -145,7 +152,7 @@ async function download() {
   try {
     if (window.showSaveFilePicker) handle = await window.showSaveFilePicker({suggestedName: downloadName});
     busy = true; render(); $("download").disabled = true;
-    const response = await fetch(`${engine}/api/batches/${batch}/download`, {targetAddressSpace: "loopback", headers: {"X-Any2Any-Token": token}});
+    const response = await engineFetch(`/api/batches/${batch}/download`, {headers: {"X-Any2Any-Token": token}});
     if (!response.ok) throw new Error("Download expired. Convert the files again.");
     if (handle) {
       const stream = await handle.createWritable();
