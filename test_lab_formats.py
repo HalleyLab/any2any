@@ -404,7 +404,6 @@ def main():
             source.rename(probe)
             probe.rename(source)
 
-        assert 'tex (layout)' in a.FORMAT_LABELS.values()
     print(f'PASS: {checks} lab/image/genomic/LaTeX conversions plus metadata and safety checks.', flush=True)
 
 

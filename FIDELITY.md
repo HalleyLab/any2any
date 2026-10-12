@@ -1,6 +1,6 @@
 # Fidelity validation
 
-Validated on Windows with the pinned dependencies, 2026-10-11.
+Validated on Windows with the pinned dependencies, 2026-10-12.
 
 **Supported does not mean universally lossless.** A readable output can still lose
 values, annotations or layout. Preservation files retain information that the
@@ -10,12 +10,14 @@ reapplied by every reverse converter. Originals are never replaced.
 ## Results
 
 The six suites completed **1,298 successful conversions and 58 safe refusals**,
-plus cancellation, collision, original-preservation and compact-interface checks.
+plus cancellation, collision and original-preservation checks. Local API and browser
+checks cover cross-folder selection, extension-based names, asset links, flat ZIP
+downloads, save streams, access controls and responsive layouts.
 Failures publish no partial files; existing outputs are not overwritten.
 
 | Suite | Successful conversions | Safe refusals |
 | --- | ---: | ---: |
-| Core/UI | 84 | Additional safety assertions |
+| Core | 84 | Additional safety assertions |
 | Research/code | 166 | Additional boundary assertions |
 | Generated lab/image/genomic/LaTeX | 113 | Additional safety assertions |
 | Adversarial fidelity | 78 | 31 |

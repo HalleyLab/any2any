@@ -7,7 +7,6 @@ import uuid
 from urllib.parse import quote
 import os
 from pathlib import Path
-import queue
 import shutil
 import subprocess
 import tempfile
@@ -31,7 +30,6 @@ import lab_signals
 import pdf_latex
 
 EXTRA_CONVERTERS = (source_formats, imaging_formats, lab_signals, scientific, research_formats, genomics_formats, pdf_latex)
-FORMAT_LABELS = {"tex": "tex (text)", "tex-layout": "tex (layout)"}
 
 ROOT = Path(__file__).resolve().parent
 pillow_heif.register_heif_opener()
@@ -92,7 +90,7 @@ READERS = {"md": "markdown", "markdown": "markdown", "html": "html", "htm": "htm
            "fb2": "fb2", "org": "org", "docx": "docx", "odt": "odt"}
 WRITERS = {"md": "markdown", "html": "html5", "epub": "epub3", "rst": "rst",
            "tex": "latex", "org": "org", "docx": "docx", "odt": "odt", "txt": "plain"}
-OFFICE_DOC = {"doc", "docx", "odt", "rtf", "txt", "html", "htm"}
+OFFICE_DOC = {"doc", "docx", "odt", "rtf", "txt"}
 OFFICE_TARGET = {"doc", "docx", "odt", "rtf", "pdf", "txt", "html"}
 
 class Cancelled(Exception):
@@ -429,7 +427,19 @@ def convert_media(source, ext, folder, cancel):
         run_command([ffmpeg, "-v", "error", "-xerror", "-nostdin", "-i", result,
                      "-t", "1", "-f", "null", "-"], cancel, timeout=120)
 
-def convert(source, ext, output, cancel=None):
+def batch_names(sources):
+    names = []
+    formats = {}
+    for path in map(Path, sources):
+        compressed = genomics_formats.sequence_gzip(path)
+        stem = path.with_suffix("").stem if compressed else path.stem
+        ext = "_".join(suffix.lstrip(".") for suffix in path.suffixes[-2:]) if compressed else path.suffix.lstrip(".")
+        names.append((stem, ext))
+        formats.setdefault(stem.casefold(), set()).add(ext.casefold())
+    return [f"{stem}_{ext.lower()}" if len(formats[stem.casefold()]) > 1 else stem for stem, ext in names]
+
+
+def convert(source, ext, output, cancel=None, output_stem=None):
     source, output = Path(source).resolve(), Path(output).resolve()
     ext = ext.lower().lstrip(".")
     if not source.is_file():
@@ -485,20 +495,27 @@ def convert(source, ext, output, cancel=None):
                 with pymupdf.open(file) as document:
                     if not document.page_count:
                         raise RuntimeError("The output PDF has no pages.")
-        return publish_files(folder, produced, source, output, cancel, manifests)
+        return publish_files(folder, produced, source, output, cancel, manifests, output_stem)
 
-def publish_files(folder, produced, source, output, cancel, manifests):
+def publish_files(folder, produced, source, output, cancel, manifests, output_stem=None):
     files = sorted(file for file in folder.rglob("*") if file.is_file())
     destinations = {}
     reserved = []
     try:
         asset_index = 0
         source_stem = source.with_suffix("").stem if genomics_formats.sequence_gzip(source) else source.stem
+        original_stem = source_stem
+        source_stem = output_stem or source_stem
         tex_assets = any(file.suffix.lower() == ".tex" for file in produced)
         asset_stem = re.sub(r"[^A-Za-z0-9_-]", "_", source_stem)[:100] if tex_assets else source_stem
         for file in files:
             if file in produced:
-                name = f"{source_stem}{file.suffix}" if len(produced) == 1 else file.name
+                if len(produced) == 1:
+                    name = f"{source_stem}{file.suffix}"
+                elif file.name.startswith(original_stem):
+                    name = source_stem + file.name[len(original_stem):]
+                else:
+                    name = f"{source_stem}_{file.name}" if output_stem else file.name
             else:
                 asset_index += 1
                 name = f"{asset_stem}_asset_{asset_index}{file.suffix}"
@@ -545,189 +562,6 @@ def publish_files(folder, produced, source, output, cancel, manifests):
             file.unlink(missing_ok=True)
         raise
 
-def gui():
-    import tkinter as tk
-    from tkinter import ttk, filedialog, messagebox
-
-    root = tk.Tk()
-    root.title("Any2Any")
-    root.minsize(360, 0)
-    root.resizable(False, False)
-    style = ttk.Style(root)
-    style.theme_use("vista")
-    style.configure(".", font=("Segoe UI", 10))
-    main = ttk.Frame(root, padding=14)
-    main.pack(fill="both", expand=True)
-    toolbar = ttk.Frame(main)
-    toolbar.pack(fill="x")
-    controls = ttk.Frame(main)
-    controls.pack(fill="x", pady=12)
-    ttk.Label(controls, text="To").pack(side="left")
-    files, details, events, cancel = [], [], queue.Queue(), threading.Event()
-    state = {"busy": False, "finished": False}
-    target = tk.StringVar()
-    output = tk.StringVar(value=str(ROOT / "output"))
-    status = tk.StringVar(value="Choose files to start.")
-    formats = ttk.Combobox(controls, textvariable=target, width=14, state="readonly")
-    formats.pack(side="left", padx=10)
-    ttk.Label(main, textvariable=status, width=44, wraplength=320).pack(anchor="w")
-
-    def reset_action():
-        state["finished"] = False
-        start_button.configure(text="Convert", state="normal" if files else "disabled")
-
-    def update_files():
-        common = [ext for ext in targets(files[0]) if all(ext in targets(f) for f in files)] if files else []
-        common = [FORMAT_LABELS.get(ext, ext) for ext in common]
-        formats.configure(values=common)
-        if target.get() not in common:
-            target.set(common[0] if common else "")
-        choose_button.configure(text=f"Add Files ({len(files)})" if files else "Add Files")
-        status.set(f"{len(files)} file(s) selected." if files else "Choose files to start.")
-        reset_action()
-
-    def choose():
-        chosen = filedialog.askopenfilenames(title="Select files to convert", filetypes=[("All files", "*.*")])
-        if not chosen:
-            return
-        selected, rejected = files.copy(), []
-        for value in chosen:
-            path = Path(value)
-            if path in selected:
-                continue
-            if not category(path):
-                rejected.append(path.name + ": unsupported format")
-                continue
-            if not set.intersection(*(set(targets(f)) for f in selected + [path])):
-                rejected.append(path.name + ": convert in a separate batch")
-                continue
-            selected.append(path)
-        files[:] = selected
-        update_files()
-        if rejected:
-            messagebox.showinfo("Some files were not added", "\n".join(rejected), parent=root)
-
-    def clear():
-        if not state["busy"]:
-            files.clear()
-            update_files()
-
-    def browse():
-        selected = filedialog.askdirectory(title="Choose an output folder")
-        if selected:
-            output.set(selected)
-
-    def open_output():
-        path = Path(output.get()).expanduser()
-        if path.is_dir():
-            os.startfile(path)
-        else:
-            messagebox.showinfo("Output folder", "This folder will be created when conversion starts.", parent=root)
-
-    def show_details():
-        window = tk.Toplevel(root)
-        window.title("Details")
-        window.geometry("600x320")
-        window.transient(root)
-        log = tk.Text(window, wrap="word", font=("Segoe UI", 10))
-        scrollbar = ttk.Scrollbar(window, command=log.yview)
-        log.configure(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side="right", fill="y")
-        log.pack(fill="both", expand=True)
-        log.insert("end", "Output: " + output.get() + "\n\n"
-                   + "\n".join(str(path) for path in files) + "\n\n" + "\n".join(details))
-        log.configure(state="disabled")
-
-    def work(batch, ext, folder):
-        succeeded = failed = 0
-        for index, source in enumerate(batch):
-            if cancel.is_set():
-                break
-            events.put(("status", f"Converting {index + 1}/{len(batch)}..."))
-            try:
-                result = convert(source, ext, folder, cancel)
-                succeeded += 1
-                events.put(("log", f"OK: {source.name} -> " + ", ".join(str(path) for path in result)))
-            except Cancelled:
-                events.put(("log", f"Cancelled: {source.name}"))
-                break
-            except Exception as error:
-                failed += 1
-                events.put(("log", f"Failed: {source.name}\n{error}"))
-        events.put(("done", succeeded, failed, cancel.is_set()))
-
-    def start():
-        if state["busy"]:
-            cancel.set()
-            start_button.configure(text="Cancelling...", state="disabled")
-            status.set("Cancelling...")
-            return
-        if state["finished"]:
-            open_output()
-            return
-        if not files or not target.get():
-            messagebox.showinfo("No files selected", "Choose files and an output format first.", parent=root)
-            return
-        if not output.get().strip():
-            messagebox.showerror("Output folder", "Choose a valid output folder.", parent=root)
-            return
-        cancel.clear()
-        details.clear()
-        state["busy"] = True
-        choose_button.configure(state="disabled")
-        more.configure(state="disabled")
-        formats.configure(state="disabled")
-        start_button.configure(text="Cancel")
-        status.set("Converting...")
-        threading.Thread(target=work, args=(files.copy(), next((ext for ext, label in FORMAT_LABELS.items() if label == target.get()), target.get()), output.get()), daemon=True).start()
-
-    def poll():
-        try:
-            while True:
-                event = events.get_nowait()
-                if event[0] == "status":
-                    status.set(event[1])
-                elif event[0] == "log":
-                    details.append(event[1])
-                elif event[0] == "done":
-                    state["busy"] = False
-                    state["finished"] = bool(event[1]) and not event[3]
-                    choose_button.configure(state="normal")
-                    more.configure(state="normal")
-                    formats.configure(state="readonly")
-                    start_button.configure(text="Open Folder" if state["finished"] else "Convert", state="normal")
-                    status.set(f"{'Cancelled' if event[3] else 'Done'}: {event[1]} converted"
-                               + (f", {event[2]} failed. More > Details." if event[2] else "."))
-        except queue.Empty:
-            pass
-        root.after(100, poll)
-
-    def close():
-        if state["busy"]:
-            messagebox.showinfo("Converting", "Click Cancel and wait for the current operation to stop before closing.", parent=root)
-        else:
-            close_office()
-            root.destroy()
-
-    choose_button = ttk.Button(toolbar, text="Add Files", command=choose)
-    choose_button.pack(side="left")
-    more = ttk.Menubutton(toolbar, text="More")
-    menu = tk.Menu(more, tearoff=False)
-    more.configure(menu=menu)
-    menu.add_command(label="Choose Output Folder...", command=browse)
-    menu.add_command(label="Open Output Folder", command=open_output)
-    menu.add_separator()
-    menu.add_command(label="Clear Files", command=clear)
-    menu.add_command(label="Details", command=show_details)
-    menu.add_command(label="Help", command=lambda: os.startfile(ROOT / "README.md"))
-    more.pack(side="right")
-    start_button = ttk.Button(controls, text="Convert", width=12, command=start, state="disabled")
-    start_button.pack(side="right")
-    formats.bind("<<ComboboxSelected>>", lambda event: reset_action())
-    root.protocol("WM_DELETE_WINDOW", close)
-    poll()
-    root.mainloop()
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Any2Any local batch converter. Run without file arguments to open the GUI.")
     parser.add_argument("files", nargs="*")
@@ -738,12 +572,13 @@ if __name__ == "__main__":
         if not args.to:
             parser.error("Command-line conversion requires --to")
         failures = 0
-        for name in args.files:
+        for name, output_stem in zip(args.files, batch_names(args.files)):
             try:
-                for result in convert(name, args.to, args.out):
+                for result in convert(name, args.to, args.out, output_stem=output_stem):
                     print(result)
             except Exception as error:
                 failures += 1
                 print(f"Failed: {name}\n{error}")
         raise SystemExit(bool(failures))
-    gui()
+    from web_app import launch
+    launch()

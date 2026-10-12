@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' http://127.0.0.1:8765; img-src 'self' blob:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'">
+  <title>Any2Any — Formats converter</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <a class="brand" href="./" aria-label="Any2Any home"><img src="icon.svg" alt="" width="32" height="32">any<span>2</span>any</a>
+      <div class="header-actions"><button id="connection" class="connection" title="Connect to the local engine"><i></i><span>Connecting</span></button>
+        <details id="menu"><summary aria-label="More options">···</summary><nav><button id="clear">Clear files</button><a href="https://github.com/HalleyLab/any2any#supported-formats" target="_blank" rel="noopener">Supported formats ↗</a><a href="https://github.com/HalleyLab/any2any#setup" target="_blank" rel="noopener">Get the local app ↗</a><button id="quit">Quit engine</button></nav></details>
+      </div>
+    </header>
+    <section class="intro"><p class="eyebrow">SAME FILE. NEW POSSIBILITIES.</p><h1>A change of <em>format.</em></h1><p>Pick your files. We'll take it from here.</p></section>
+    <section class="converter" aria-label="File converter">
+      <input type="file" id="picker" multiple hidden>
+      <button id="add" class="drop"><span class="add-icon" aria-hidden="true">+</span><strong>Add files</strong><span>or drop them here · add more anytime</span></button>
+      <ul id="files" aria-label="Selected files"></ul>
+      <div class="controls"><label for="format">To</label><select id="format" disabled><option value="">Choose format</option></select><button id="convert" class="primary" disabled>Convert <span aria-hidden="true">↗</span></button></div>
+      <div id="activity" hidden><div class="progress"><div id="bar"></div></div><div class="activity-row"><span id="progress-text"></span><button id="cancel" class="text-button">Cancel</button></div></div>
+      <div id="result" hidden><div><span class="check" aria-hidden="true">✓</span><strong id="result-title">Conversion complete</strong><small id="result-detail"></small></div><button id="download" class="primary">Download <span aria-hidden="true">↓</span></button></div>
+    </section>
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+    <details id="errors" hidden><summary>View details</summary><ul></ul></details>
+    <footer><span class="privacy-dot"></span> Your files stay on this computer.<span class="footer-note">Made to move between formats.</span></footer>
+  </main>
+</body>
+</html>

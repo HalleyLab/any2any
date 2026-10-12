@@ -1,14 +1,20 @@
 # Any2Any
 
-Local batch file converter for Windows, with a compact English interface.
+Formats converter for Windows. [Open the web app](https://halleylab.github.io/any2any/).
 
-1. Open **StartAny2Any.bat**.
-2. Click **Add Files**; repeat to add files from other folders.
-3. Choose an output format and click **Convert**.
+1. Run **StartAny2Any.bat** to start the local engine and desktop interface.
+2. **Add files** from one or more folders, choose a format, then **Convert**.
+3. When conversion completes, click **Download** and choose where to save.
 
-Results go directly into the output folder. Existing files are never overwritten.
-Keep generated metadata and preservation files with the results.
-Use **More** to change the output folder, clear files or view errors.
+The desktop and Pages interfaces use the same local engine. Files stay on your
+computer. Use Edge or Chrome; allow local-network access when prompted.
+Multiple outputs download as a flat ZIP, including metadata and preservation files.
+Keep these files together. Add companions in the same selection; click a file's
+format badge to mark it as a companion.
+Same-name inputs with different suffixes become `sample_png.jpg`, `sample_tiff.jpg`;
+remaining collisions get numbers. Existing files are never overwritten by the engine.
+Use **···** to clear the selection or quit the engine. Closing the window keeps the
+engine available; inactive batches expire after one hour.
 
 ## Supported formats
 
@@ -56,6 +62,7 @@ Install [LibreOffice](https://www.libreoffice.org/download/download-libreoffice/
 for Office conversions. FFmpeg and Pandoc are included with the Python dependencies.
 Local dependencies and converted files are excluded from Git.
 
-Run **RunTests.bat** for conversion and interface checks.
+Run **RunTests.bat** for conversion and local API checks. Optional browser checks:
+`node test_web_ui.cjs` (Playwright installed, local engine running).
 
 [MIT License](LICENSE). Third-party components retain their own licenses.

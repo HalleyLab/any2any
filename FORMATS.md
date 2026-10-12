@@ -3,7 +3,7 @@
 ## Supported formats
 
 These are supported input extensions, not a guarantee that every codec, encrypted file, or file variant can be converted.
-The format selector shows only outputs supported by every file in the current batch. Convert incompatible categories in separate batches.
+The format selector shows only outputs supported by every input in the current batch. In the interface, add companion files together and click a format badge to mark a recognized file as a companion. Uploaded companions must be referenced by filename beside the source; nested directory dependencies require the CLI with the original folder structure. Convert incompatible categories in separate batches.
 
 | Category | Common inputs | Outputs |
 | --- | --- | --- |
@@ -73,8 +73,8 @@ See INPUTS and OUTPUTS in any2any.py and the converter modules for the complete 
 See [FIDELITY.md](FIDELITY.md) for measured checks, fixes and unverified scope. Supported conversions are not universally lossless.
 
 - Files are decoded and encoded, or converted through Office/Pandoc. This is not extension renaming.
-- Originals are preserved. Converted files go directly into the output folder. Duplicate filenames receive a numeric suffix; existing files are never overwritten.
-- Conversion uses a temporary folder outside the output folder. Validated results are then published as files. Failure or cancellation rolls back the current conversion. Details shows the errors.
+- Originals are preserved. Converted files go directly into the output folder. Same-stem inputs with different original extensions receive an extension suffix (for example sample_png.jpg and sample_tiff.jpg). Remaining collisions receive numbers; existing files are never overwritten.
+- Conversion uses a temporary folder outside the output folder. Validated results are then published as files. Failure or cancellation rolls back the current conversion. View details shows the errors. The interface downloads multiple results and preservation assets as a flat ZIP; the CLI writes directly to --out.
 - JPG, BMP, PPM and image-to-PDF outputs use white backgrounds for transparency. ICO images are limited to 256 by 256 pixels. Decoded original pixels and parsed metadata retain companions for lossy, flattened, resized and animated-WebP outputs. Static WebP uses lossless encoding.
 - Animated GIF, WebP, PNG/APNG and AVIF outputs retain frames. TIFF/PDF outputs retain pages. Static image outputs such as JPG export each frame separately.
 - PDF images are rendered at 150 DPI, one file per page. PDF-to-TXT and editable LaTeX extract existing text without OCR. Use tex (layout) for scanned pages. Editable PDF-to-Word is not provided.
