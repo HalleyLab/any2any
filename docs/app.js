@@ -80,10 +80,10 @@ async function uploadPending() {
         headers: {"Content-Type": "application/octet-stream", "X-File-Name": encodeURIComponent(item.file.name), "X-File-Group": String(item.group)}});
       item.id = data.id; item.targets = data.targets; render();
     }
-    message(files.length ? `${files.length} file${files.length === 1 ? "" : "s"} ready. Add files from another folder anytime.` : "");
+    message(files.length ? `${files.length} file${files.length === 1 ? "" : "s"} ready.` : "");
   } catch (error) {
     connected(false);
-    message("Open StartAny2Any.bat, allow local-network access if prompted, then click Connect. " + error.message, true);
+    message(error.message, true);
   } finally {busy = false; render();}
 }
 async function addFiles(selected) {
@@ -177,7 +177,7 @@ $("clear").onclick = async () => {
 };
 $("quit").onclick = async () => {
   $("menu").open = false;
-  try {await api("/api/shutdown", {method: "POST"}); connected(false); token = ""; batch = ""; completed = false; $("result").hidden = true; for (const item of files) {item.id = ""; item.targets = [];} message("Engine stopped. Open StartAny2Any.bat to reconnect."); render();} catch (error) {message(error.message, true);}
+  try {await api("/api/shutdown", {method: "POST"}); connected(false); token = ""; batch = ""; completed = false; $("result").hidden = true; for (const item of files) {item.id = ""; item.targets = [];} message("Engine stopped."); render();} catch (error) {message(error.message, true);}
 };
 document.addEventListener("click", event => {if (!$("menu").contains(event.target)) $("menu").open = false;});
-connect().then(() => message("Select all companion files together for multi-file instrument formats.")).catch(() => {connected(false); message("Open StartAny2Any.bat, then click Connect. Allow local-network access if prompted.");});
+connect().catch(() => connected(false));

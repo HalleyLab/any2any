@@ -26,7 +26,6 @@ nav{position:absolute;z-index:3;right:0;top:36px;width:200px;border:1px solid va
 nav button,nav a{display:block;border:0;width:100%;text-align:left;padding:11px 10px;background:none;border-radius:8px;font-size:12px}
 nav button:hover,nav a:hover{background:#f1f3e9}
 .intro{margin:48px 0 26px}
-.eyebrow{font-size:9px!important;letter-spacing:2px;font-weight:700;color:#657153!important;margin-bottom:13px!important}
 h1{font-size:clamp(29px,6.6vw,39px);line-height:1.12;letter-spacing:-1.6px;margin:0;font-weight:650}
 h1 em{font-family:Georgia,serif;font-weight:400}
 p{margin:12px 0;font-size:13px;color:var(--muted)}
