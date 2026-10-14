@@ -1,6 +1,9 @@
 # Any2Any
 
-Formats converter for Windows. [Open the web app](https://halleylab.github.io/any2any/).
+Formats converter for Windows.
+
+**Desktop:** run **StartAny2Any.bat**. It opens a standalone window and works offline.
+**Web:** [open the web app](https://halleylab.github.io/any2any/) with the local engine running.
 
 1. Run **StartAny2Any.bat** to start the local engine and desktop interface.
 2. **Add files** from one or more folders, choose a format, then **Convert**.
@@ -9,8 +12,10 @@ Formats converter for Windows. [Open the web app](https://halleylab.github.io/an
 The desktop and Pages interfaces use the same local engine. Files stay on your
 computer. Use Edge or Chrome; allow local-network access when prompted.
 Multiple outputs download as a flat ZIP, including metadata and preservation files.
-Keep these files together. Add companions in the same selection; click a file's
-format badge to mark it as a companion.
+NPY/NPZ companions retain original numeric samples when the target cannot; JSON
+companions retain metadata and backup references. The converted file opens on its
+own; keep companions when the original data or metadata matters.
+Add companions in the same selection; click a file's format badge to mark it as a companion.
 Same-name inputs with different suffixes become `sample_png.jpg`, `sample_tiff.jpg`;
 remaining collisions get numbers. Existing files are never overwritten by the engine.
 Use **···** to clear the selection or quit the engine. Closing the window keeps the
